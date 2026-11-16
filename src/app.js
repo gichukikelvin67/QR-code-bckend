@@ -5,6 +5,11 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import authRoutes from "./modules/auth/auth.routes.js";
 import restaurantRoutes from "./modules/restaurants/restaurant.routes.js";
+import tableRoutes from "./modules/tables/table.routes.js";
+import sessionRoutes from "./modules/sessions/session.routes.js";
+import menuRoutes from "./modules/menu/menu.routes.js";
+import publicMenuRoutes from "./modules/menu/public-menu.routes.js";
+import publicOrderRoutes from "./modules/orders/public-order.routes.js";
 
 import { env } from "./config/env.js";
 
@@ -43,6 +48,11 @@ app.get("/", (req, res) => {
 app.use("/api/health", healthRoutes);
 app.use("/api/restaurants", restaurantRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/tables", tableRoutes);
+app.use("/api/sessions", sessionRoutes);
+app.use("/api/menu",menuRoutes);
+app.use("/api/public", publicMenuRoutes);
+app.use("/api/public", publicOrderRoutes);
 
 
 app.use(notFoundHandler);
