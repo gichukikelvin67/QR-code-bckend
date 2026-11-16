@@ -25,6 +25,7 @@ export const createMenuItemSchema = z.object({
   price: z.number().positive().max(99999999.99),
   imageUrl: z.string().url().optional().nullable(),
   isAvailable: z.boolean().default(true),
+  station: z.enum(["KITCHEN", "BAR"]).default("KITCHEN"),
 });
 
 export const updateMenuItemSchema = z
@@ -35,6 +36,7 @@ export const updateMenuItemSchema = z
     price: z.number().positive().max(99999999.99).optional(),
     imageUrl: z.string().url().nullable().optional(),
     isAvailable: z.boolean().optional(),
+    station: z.enum(["KITCHEN", "BAR"]).optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "Provide at least one field to update.",

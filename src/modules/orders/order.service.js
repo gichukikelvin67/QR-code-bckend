@@ -1,6 +1,7 @@
 
 import { randomBytes } from "node:crypto";
 import prisma from "../../config/database.js";
+import { getSocketInstance } from "../../sockets/socket-instance.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -38,7 +39,7 @@ export async function createPublicOrder(
   tableToken,
   data
 ) {
-  return prisma.$transaction(
+  const result=await prisma.$transaction(
     async (tx) => {
       const restaurant = await tx.restaurant.findFirst({
         where: {
@@ -108,6 +109,7 @@ export async function createPublicOrder(
           id: true,
           name: true,
           price: true,
+          station:true,
         },
       });
 
@@ -142,6 +144,9 @@ export async function createPublicOrder(
           quantity: requestedItem.quantity,
           notes: requestedItem.notes ?? null,
           lineTotal: formatMoney(lineTotalCents),
+
+          station:menuItem.station,
+          preparationStatus:"PENDING",
         };
       });
 
@@ -184,6 +189,7 @@ export async function createPublicOrder(
     {
       isolationLevel: "Serializable",
     }
+ 
   ).catch((error) => {
     if (error.code === "P2034") {
       throw createError(
@@ -194,4 +200,49 @@ export async function createPublicOrder(
 
     throw error;
   });
+
+  // Get Socket.IO after the database transaction commits.
+  const io = getSocketInstance();
+
+  if (io) {
+    const kitchenItems = result.order.items.filter(
+      (item) => item.station === "KITCHEN"
+    );
+
+    const barItems = result.order.items.filter(
+      (item) => item.station === "BAR"
+    );
+
+    const eventPayload = {
+      orderId: result.order.id,
+      orderNumber: result.order.orderNumber,
+      tableNumber: result.order.session.table.tableNumber,
+      orderStatus: result.order.status,
+    };
+
+    if (kitchenItems.length > 0) {
+      io.to(`restaurant:${result.restaurant.id}:kitchen`).emit(
+        "preparation:new-order",
+        {
+          ...eventPayload,
+          station: "KITCHEN",
+          items: kitchenItems,
+        }
+      );
+    }
+
+    if (barItems.length > 0) {
+      io.to(`restaurant:${result.restaurant.id}:bar`).emit(
+        "preparation:new-order",
+        {
+          ...eventPayload,
+          station: "BAR",
+          items: barItems,
+        }
+      );
+    }
+  }
+
+  return result;
 }
+

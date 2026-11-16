@@ -46,6 +46,18 @@ enum OrderSource {
   POS
 }
 
+enum PreparationStation {
+  KITCHEN
+  BAR
+}
+
+enum PreparationStatus {
+  PENDING
+  PREPARING
+  READY
+  SERVED
+}
+
 model Restaurant {
   id       String  @id @default(uuid())
   name     String
@@ -171,11 +183,12 @@ model MenuItem {
   imageUrl     String?
   isAvailable  Boolean @default(true)
 
-  restaurant Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  category   MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  restaurant Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  category   MenuCategory       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   orderItems OrderItem[]
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  station    PreparationStation @default(KITCHEN)
 
   @@index([restaurantId, isAvailable])
   @@index([categoryId, isAvailable])
@@ -221,7 +234,9 @@ model OrderItem {
   order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
 
-  createdAt DateTime @default(now())
+  createdAt         DateTime           @default(now())
+  preparationStatus PreparationStatus  @default(PENDING)
+  station           PreparationStation @default(KITCHEN)
 
   @@index([orderId])
   @@index([menuItemId])
