@@ -78,6 +78,7 @@ export const updateInventoryCategory = async (
   });
 };
 
+
 export const createInventoryItem = async (restaurantId, data) => {
   if (data.categoryId) {
     const category = await prisma.inventoryCategory.findFirst({
@@ -103,7 +104,7 @@ export const createInventoryItem = async (restaurantId, data) => {
     }
   }
 
-  const initialStock = toDecimal(data.currentStock ?? 0);
+  const initialStock = Number(data.currentStock ?? 0);
 
   return prisma.$transaction(async (tx) => {
     const item = await tx.inventoryItem.create({
@@ -127,8 +128,9 @@ export const createInventoryItem = async (restaurantId, data) => {
           inventoryItemId: item.id,
           type: "ADJUSTMENT_IN",
           quantity: initialStock,
-          unitCost: data.costPerUnit ?? 0,
-          reference: "INITIAL_STOCK",
+          stockBefore: 0,
+          stockAfter: initialStock,
+          referenceId: "INITIAL_STOCK",
           notes: "Opening inventory balance",
         },
       });
@@ -137,6 +139,9 @@ export const createInventoryItem = async (restaurantId, data) => {
     return item;
   });
 };
+
+
+
 
 export const listInventoryItems = async (restaurantId, filters) => {
   const {
@@ -157,20 +162,48 @@ export const listInventoryItems = async (restaurantId, filters) => {
     ...(search
       ? {
           OR: [
-            { name: { contains: search, mode: "insensitive" } },
-            { sku: { contains: search, mode: "insensitive" } },
+            {
+              name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              sku: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
           ],
         }
       : {}),
-    ...(lowStock === "true"
-      ? { currentStock: { lte: prisma.inventoryItem.fields.reorderLevel } }
-      : {}),
   };
 
-  // Prisma cannot compare two model fields in a standard where filter.
-  // Fetch active items and apply the low-stock comparison in JavaScript.
+  // Fetch matching records before applying low-stock filtering.
   if (lowStock === "true") {
-    delete where.currentStock;
+    const allItems = await prisma.inventoryItem.findMany({
+      where,
+      include: { category: true },
+      orderBy: { name: "asc" },
+    });
+
+    const filteredItems = allItems.filter(
+      (item) =>
+        Number(item.currentStock) <= Number(item.reorderLevel)
+    );
+
+    const total = filteredItems.length;
+    const start = (page - 1) * limit;
+
+    return {
+      items: filteredItems.slice(start, start + limit),
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      },
+    };
   }
 
   const [items, total] = await prisma.$transaction([
@@ -178,28 +211,24 @@ export const listInventoryItems = async (restaurantId, filters) => {
       where,
       include: { category: true },
       orderBy: { name: "asc" },
-      ...pagination(page, limit),
+      skip: (page - 1) * limit,
+      take: limit,
     }),
+
     prisma.inventoryItem.count({ where }),
   ]);
 
-  const filteredItems =
-    lowStock === "true"
-      ? items.filter(
-          (item) => Number(item.currentStock) <= Number(item.reorderLevel)
-        )
-      : items;
-
   return {
-    items: filteredItems,
+    items,
     pagination: {
       page,
       limit,
-      total: lowStock === "true" ? filteredItems.length : total,
-      pages: Math.ceil((lowStock === "true" ? filteredItems.length : total) / limit),
+      total,
+      pages: Math.ceil(total / limit),
     },
   };
 };
+
 
 export const getInventoryItem = async (restaurantId, itemId) => {
   const item = await prisma.inventoryItem.findFirst({
@@ -300,6 +329,7 @@ export const updateSupplier = async (restaurantId, supplierId, data) => {
   });
 };
 
+
 export const receiveStock = async (restaurantId, userId, data) => {
   return prisma.$transaction(async (tx) => {
     if (data.supplierId) {
@@ -323,10 +353,11 @@ export const receiveStock = async (restaurantId, userId, data) => {
         reference: data.reference ?? null,
         notes: data.notes ?? null,
         status: "POSTED",
-        receivedBy: userId,
-        postedAt: new Date(),
+        receivedAt: new Date(),
       },
     });
+
+    let totalCost = 0;
 
     for (const line of data.items) {
       const item = await tx.inventoryItem.findFirst({
@@ -338,11 +369,19 @@ export const receiveStock = async (restaurantId, userId, data) => {
       });
 
       if (!item) {
-        throw createError("One or more inventory items were not found or are inactive.", 404);
+        throw createError(
+          "One or more inventory items were not found or are inactive.",
+          404
+        );
       }
 
-      const quantity = toDecimal(line.quantity);
-      const unitCost = toDecimal(line.unitCost);
+      const quantity = Number(line.quantity);
+      const unitCost = Number(line.unitCost);
+      const stockBefore = Number(item.currentStock);
+      const stockAfter = stockBefore + quantity;
+      const lineCost = quantity * unitCost;
+
+      totalCost += lineCost;
 
       await tx.stockReceiptItem.create({
         data: {
@@ -350,7 +389,7 @@ export const receiveStock = async (restaurantId, userId, data) => {
           inventoryItemId: item.id,
           quantity,
           unitCost,
-          totalCost: quantity * unitCost,
+          lineCost,
         },
       });
 
@@ -366,25 +405,33 @@ export const receiveStock = async (restaurantId, userId, data) => {
         data: {
           restaurantId,
           inventoryItemId: item.id,
+          receiptId: receipt.id,
           type: "RECEIPT",
           quantity,
-          unitCost,
-          reference: receipt.reference ?? receipt.id,
+          stockBefore,
+          stockAfter,
+          referenceId: receipt.reference ?? receipt.id,
           notes: `Stock receipt ${receipt.id}`,
           performedBy: userId,
         },
       });
     }
 
-    return tx.stockReceipt.findUnique({
+    return tx.stockReceipt.update({
       where: { id: receipt.id },
+      data: {
+        totalCost,
+      },
       include: {
         supplier: true,
-        items: { include: { inventoryItem: true } },
+        items: {
+          include: { inventoryItem: true },
+        },
       },
     });
   });
 };
+
 
 export const adjustStock = async (restaurantId, userId, data) => {
   return prisma.$transaction(async (tx) => {
@@ -400,16 +447,23 @@ export const adjustStock = async (restaurantId, userId, data) => {
       throw createError("Inventory item not found or inactive.", 404);
     }
 
-    const quantity = toDecimal(data.quantity);
-    const currentStock = toDecimal(item.currentStock);
-    const decreasesStock = ["ADJUSTMENT_OUT", "WASTE"].includes(data.type);
+    const quantity = Number(data.quantity);
 
-    if (decreasesStock && quantity > currentStock) {
-      throw createError("Insufficient stock for this adjustment.", 409);
-    }
+    const decreasesStock = [
+      "ADJUSTMENT_OUT",
+      "WASTE",
+    ].includes(data.type);
 
-    const updatedItem = await tx.inventoryItem.update({
-      where: { id: item.id },
+    // Atomically update stock while preventing negative balances.
+    const updateResult = await tx.inventoryItem.updateMany({
+      where: {
+        id: item.id,
+        restaurantId,
+        isActive: true,
+        ...(decreasesStock
+          ? { currentStock: { gte: quantity } }
+          : {}),
+      },
       data: {
         currentStock: decreasesStock
           ? { decrement: quantity }
@@ -420,22 +474,47 @@ export const adjustStock = async (restaurantId, userId, data) => {
       },
     });
 
+    if (updateResult.count !== 1) {
+      throw createError(
+        "Insufficient stock or inventory item unavailable. Refresh and try again.",
+        409
+      );
+    }
+
+    const updatedItem = await tx.inventoryItem.findFirst({
+      where: {
+        id: item.id,
+        restaurantId,
+      },
+    });
+
+    const stockAfter = Number(updatedItem.currentStock);
+
+    const stockBefore = decreasesStock
+      ? stockAfter + quantity
+      : stockAfter - quantity;
+
     const movement = await tx.stockMovement.create({
       data: {
         restaurantId,
         inventoryItemId: item.id,
         type: data.type,
         quantity,
-        unitCost: data.unitCost ?? item.costPerUnit,
-        reference: data.reference ?? null,
+        stockBefore,
+        stockAfter,
+        referenceId: data.reference ?? null,
         notes: data.notes ?? null,
         performedBy: userId,
       },
     });
 
-    return { item: updatedItem, movement };
+    return {
+      item: updatedItem,
+      movement,
+    };
   });
 };
+
 
 export const listStockMovements = async (restaurantId, filters) => {
   const where = {

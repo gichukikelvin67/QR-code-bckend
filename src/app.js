@@ -16,6 +16,7 @@ import waiterRoutes from "./modules/waiters/waiter.routes.js";
 import billingRoutes from "./modules/billing/billing.routes.js";
 import barRoutes from "./modules/bar/bar.routes.js";
 import mpesaRoutes from "./modules/payments/mpesa.routes.js";
+import inventoryRoutes from "./modules/inventory/inventory.routes.js";
 import { env } from "./config/env.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -64,6 +65,7 @@ app.use("/api/bar", barRoutes);
 app.use("/api/waiters", waiterRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/payments/mpesa", mpesaRoutes);
+app.use("/api/inventory", inventoryRoutes);
 
 
 app.use(notFoundHandler);
