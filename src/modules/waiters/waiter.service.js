@@ -1,6 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { getSocketInstance } from "../../sockets/socket-instance.js";
+import { synchronizeOrderStatus } from "../orders/order-status.service.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -106,7 +107,9 @@ export async function serveOrderItem({
 
   // Conditional update prevents two waiters from serving
   // the same item simultaneously.
-  const result = await prisma.orderItem.updateMany({
+
+const updatedItem = await prisma.$transaction(async (tx) => {
+  const result = await tx.orderItem.updateMany({
     where: {
       id: itemId,
       preparationStatus: "READY",
@@ -131,7 +134,10 @@ export async function serveOrderItem({
     );
   }
 
-  const updatedItem = await prisma.orderItem.findFirst({
+  // Synchronize the overall order status.
+  await synchronizeOrderStatus(tx, item.order.id);
+
+  return tx.orderItem.findFirst({
     where: {
       id: itemId,
       order: {
@@ -150,10 +156,12 @@ export async function serveOrderItem({
         select: {
           id: true,
           orderNumber: true,
+          status: true,
         },
       },
     },
   });
+});
 
   const io = getSocketInstance();
 

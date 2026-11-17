@@ -1,6 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { getSocketInstance } from "../../sockets/socket-instance.js";
+import { synchronizeOrderStatus } from "../orders/order-status.service.js";
 
 const preparationTransitions = {
   PENDING: "PREPARING",
@@ -117,7 +118,9 @@ export async function updatePreparationStatus({
     );
   }
 
-  const result = await prisma.orderItem.updateMany({
+  
+const updatedItem = await prisma.$transaction(async (tx) => {
+  const result = await tx.orderItem.updateMany({
     where: {
       id: itemId,
       station,
@@ -143,7 +146,10 @@ export async function updatePreparationStatus({
     );
   }
 
-  const updatedItem = await prisma.orderItem.findFirst({
+  // Update the overall order status in the same transaction.
+  await synchronizeOrderStatus(tx, currentItem.order.id);
+
+  return tx.orderItem.findFirst({
     where: {
       id: itemId,
       station,
@@ -163,10 +169,13 @@ export async function updatePreparationStatus({
         select: {
           id: true,
           orderNumber: true,
+          status: true,
         },
       },
     },
   });
+});
+
 
   const io = getSocketInstance();
 
@@ -180,7 +189,8 @@ export async function updatePreparationStatus({
         station,
         preparationStatus: updatedItem.preparationStatus,
         orderId: updatedItem.order.id,
-        orderNumber: updatedItem.order.orderNumber,
+         orderNumber: updatedItem.order.orderNumber,
+        orderStatus: updatedItem.order.status,
         tableNumber: currentItem.order.session.table.tableNumber,
       }
     );

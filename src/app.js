@@ -13,7 +13,7 @@ import publicOrderRoutes from "./modules/orders/public-order.routes.js";
 import orderManagementRoutes from "./modules/orders/order-management.routes.js";
 import kitchenRoutes from "./modules/kitchen/kitchen.routes.js";
 import waiterRoutes from "./modules/waiters/waiter.routes.js";
-
+import billingRoutes from "./modules/billing/billing.routes.js";
 import barRoutes from "./modules/bar/bar.routes.js";
 import { env } from "./config/env.js";
 
@@ -61,6 +61,7 @@ app.use("/api/orders", orderManagementRoutes);
 app.use("/api/kitchen", kitchenRoutes);
 app.use("/api/bar", barRoutes);
 app.use("/api/waiters", waiterRoutes);
+app.use("/api/billing", billingRoutes);
 
 
 app.use(notFoundHandler);
