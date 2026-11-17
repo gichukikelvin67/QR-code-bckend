@@ -88,13 +88,18 @@ model Restaurant {
   email    String?
   isActive Boolean @default(true)
 
-  memberships    Membership[]
-  tables         RestaurantTable[]
-  menuCategories MenuCategory[]
-  menuItems      MenuItem[]
-  orders         Order[]
-  bills          Bill[]
-  payments       Payment[]
+  memberships         Membership[]
+  tables              RestaurantTable[]
+  menuCategories      MenuCategory[]
+  menuItems           MenuItem[]
+  orders              Order[]
+  bills               Bill[]
+  payments            Payment[]
+  inventoryCategories InventoryCategory[]
+  inventoryItems      InventoryItem[]
+  suppliers           Supplier[]
+  stockMovements      StockMovement[]
+  stockReceipts       StockReceipt[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -207,12 +212,13 @@ model MenuItem {
   imageUrl     String?
   isAvailable  Boolean @default(true)
 
-  restaurant Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  category   MenuCategory       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  orderItems OrderItem[]
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
-  station    PreparationStation @default(KITCHEN)
+  restaurant        Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  category          MenuCategory       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems        OrderItem[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  station           PreparationStation @default(KITCHEN)
+  recipeIngredients RecipeIngredient[]
 
   @@index([restaurantId, isAvailable])
   @@index([categoryId, isAvailable])
@@ -262,6 +268,7 @@ model OrderItem {
   preparationStatus PreparationStatus  @default(PENDING)
   station           PreparationStation @default(KITCHEN)
   billItems         BillItem[]
+  stockDeductions   StockDeduction[]
 
   @@index([orderId])
   @@index([menuItemId])
@@ -309,12 +316,15 @@ model Payment {
   transactionId     String?   @unique
   checkoutRequestId String?   @unique
   merchantRequestId String?
+  darajaTimestamp   String?
   phoneNumber       String?
   failureReason     String?
   verifiedAt        DateTime?
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
   bill       Bill       @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  callbackEvents PaymentCallbackEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -341,4 +351,227 @@ model BillItem {
 
   @@unique([billId, orderItemId])
   @@index([orderItemId])
+}
+
+model PaymentCallbackEvent {
+  id                String  @id @default(uuid())
+  paymentId         String?
+  checkoutRequestId String
+
+  resultCode String?
+  resultDesc String?
+
+  payload Json
+
+  processingStatus String  @default("RECEIVED")
+  processingError  String?
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([checkoutRequestId, receivedAt])
+  @@index([paymentId, receivedAt])
+  @@index([processingStatus, receivedAt])
+}
+
+enum InventoryUnit {
+  KG
+  G
+  L
+  ML
+  PIECE
+  PACKET
+}
+
+enum StockMovementType {
+  RECEIPT
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  RECIPE_DEDUCTION
+  WASTE
+  RETURN
+}
+
+enum StockReceiptStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+model InventoryCategory {
+  id           String  @id @default(uuid())
+  restaurantId String
+  name         String
+  description  String?
+  isActive     Boolean @default(true)
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  items      InventoryItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, isActive])
+}
+
+model InventoryItem {
+  id           String  @id @default(uuid())
+  restaurantId String
+  categoryId   String?
+
+  name        String
+  sku         String?
+  description String?
+
+  unit InventoryUnit
+
+  currentStock Decimal @default(0) @db.Decimal(14, 3)
+  reorderLevel Decimal @default(0) @db.Decimal(14, 3)
+
+  costPerUnit Decimal @default(0) @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  restaurant Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  category   InventoryCategory? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  movements         StockMovement[]
+  receiptItems      StockReceiptItem[]
+  recipeIngredients RecipeIngredient[]
+  stockDeductions   StockDeduction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, name])
+  @@unique([restaurantId, sku])
+  @@index([restaurantId, isActive])
+  @@index([restaurantId, currentStock])
+}
+
+model Supplier {
+  id           String @id @default(uuid())
+  restaurantId String
+
+  name    String
+  phone   String?
+  email   String?
+  address String?
+
+  isActive Boolean @default(true)
+
+  restaurant Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  receipts   StockReceipt[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, name])
+}
+
+model StockReceipt {
+  id           String  @id @default(uuid())
+  restaurantId String
+  supplierId   String?
+
+  reference String?
+  notes     String?
+
+  status StockReceiptStatus @default(DRAFT)
+
+  totalCost Decimal @default(0) @db.Decimal(14, 2)
+
+  receivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  supplier   Supplier?  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  items     StockReceiptItem[]
+  movements StockMovement[]
+
+  @@index([restaurantId, status, createdAt])
+  @@index([supplierId])
+}
+
+model StockReceiptItem {
+  id              String @id @default(uuid())
+  receiptId       String
+  inventoryItemId String
+
+  quantity Decimal @db.Decimal(14, 3)
+  unitCost Decimal @db.Decimal(12, 2)
+  lineCost Decimal @db.Decimal(14, 2)
+
+  receipt       StockReceipt  @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@index([receiptId])
+  @@index([inventoryItemId])
+}
+
+model StockMovement {
+  id              String  @id @default(uuid())
+  restaurantId    String
+  inventoryItemId String
+  receiptId       String?
+
+  type StockMovementType
+
+  quantity Decimal @db.Decimal(14, 3)
+
+  stockBefore Decimal @db.Decimal(14, 3)
+  stockAfter  Decimal @db.Decimal(14, 3)
+
+  notes String?
+
+  referenceId String?
+  performedBy String?
+
+  createdAt DateTime @default(now())
+
+  restaurant    Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  receipt       StockReceipt? @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+
+  @@index([restaurantId, createdAt])
+  @@index([inventoryItemId, createdAt])
+  @@index([receiptId])
+}
+
+model RecipeIngredient {
+  id              String @id @default(uuid())
+  menuItemId      String
+  inventoryItemId String
+
+  quantity Decimal @db.Decimal(14, 3)
+
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([menuItemId, inventoryItemId])
+  @@index([inventoryItemId])
+}
+
+model StockDeduction {
+  id              String @id @default(uuid())
+  orderItemId     String
+  inventoryItemId String
+
+  quantity Decimal @db.Decimal(14, 3)
+
+  deductedAt DateTime @default(now())
+
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  @@unique([orderItemId, inventoryItemId])
+  @@index([inventoryItemId])
 }

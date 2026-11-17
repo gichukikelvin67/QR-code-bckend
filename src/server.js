@@ -7,6 +7,10 @@ import prisma from "./config/database.js";
 import { env } from "./config/env.js";
 import { configureSocket } from "./sockets/socket.js";
 import { setSocketInstance } from "./sockets/socket-instance.js";
+import {
+  startMpesaReconciliationJob,
+  stopMpesaReconciliationJob,
+} from "./jobs/mpesa-reconciliation.job.js";
 
 
 async function startServer() {
@@ -17,6 +21,7 @@ async function startServer() {
     await prisma.$connect();
 
     console.log("Database connected successfully");
+    startMpesaReconciliationJob();
 
     server = http.createServer(app);
 
@@ -47,6 +52,7 @@ async function startServer() {
 
       isShuttingDown = true;
       console.log("Shutting down server...");
+      stopMpesaReconciliationJob();
 
       io.close();
 
