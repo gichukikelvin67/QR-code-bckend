@@ -46,7 +46,8 @@ export async function updateOrderStatusController(req, res, next) {
       req.auth.restaurantId,
       req.params.orderId,
       req.body.status,
-      req.auth.role
+      req.auth.role,
+      req.auth.userId
     );
 
     const io = getSocketInstance();

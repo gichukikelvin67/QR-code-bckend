@@ -80,6 +80,21 @@ enum PaymentStatus {
   REVERSED
 }
 
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REJECTED
+}
+
+enum LoyaltyTransactionType {
+  EARN
+  REDEEM
+  ADJUSTMENT
+  REVERSAL
+}
+
 enum DiscountType {
   PERCENTAGE
   FIXED_AMOUNT
@@ -111,6 +126,9 @@ model Restaurant {
   stockMovements      StockMovement[]
   stockReceipts       StockReceipt[]
   discounts           Discount[]
+  refunds             Refund[]
+  customers           Customer[]
+  orderStatusHistory  OrderStatusHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -123,11 +141,11 @@ model User {
   passwordHash String
   isActive     Boolean @default(true)
 
-  memberships     Membership[]
-  refreshSessions RefreshSession[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  memberships        Membership[]
+  refreshSessions    RefreshSession[]
+  orderStatusActions OrderStatusHistory[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 }
 
 model Membership {
@@ -247,9 +265,10 @@ model Order {
   subtotal Decimal @db.Decimal(12, 2)
   total    Decimal @db.Decimal(12, 2)
 
-  restaurant Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  session    DiningSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  items      OrderItem[]
+  restaurant    Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  session       DiningSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -298,12 +317,15 @@ model Bill {
   amountPaid Decimal @default(0) @db.Decimal(12, 2)
   balance    Decimal @db.Decimal(12, 2)
 
-  restaurant     Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  session        DiningSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  discountAmount Decimal       @default(0) @db.Decimal(12, 2)
-  discounts      Discount[]
-  items          BillItem[]
-  payments       Payment[]
+  restaurant          Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  session             DiningSession        @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  discountAmount      Decimal              @default(0) @db.Decimal(12, 2)
+  customerId          String?
+  customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  discounts           Discount[]
+  items               BillItem[]
+  payments            Payment[]
+  loyaltyTransactions LoyaltyTransaction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -337,6 +359,7 @@ model Payment {
   bill       Bill       @relation(fields: [billId], references: [id], onDelete: Restrict)
 
   callbackEvents PaymentCallbackEvent[]
+  refunds        Refund[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -344,6 +367,41 @@ model Payment {
   @@unique([restaurantId, idempotencyKey])
   @@index([restaurantId, status, createdAt])
   @@index([billId, status])
+}
+
+model Refund {
+  id           String @id @default(uuid())
+  restaurantId String
+  paymentId    String
+
+  amount Decimal @db.Decimal(12, 2)
+
+  reason String
+  status RefundStatus @default(PENDING)
+
+  idempotencyKey String
+
+  requestedBy String
+  approvedBy  String?
+
+  providerReference String?
+  failureReason     String?
+
+  processedAt     DateTime?
+  rejectedAt      DateTime?
+  rejectionReason String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  payment    Payment    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, idempotencyKey])
+  @@index([restaurantId, status, createdAt])
+  @@index([paymentId, status])
+  @@index([requestedBy])
+  @@index([approvedBy])
 }
 
 model BillItem {
@@ -394,6 +452,69 @@ model Discount {
   @@index([billId, status])
   @@index([approvedBy])
   @@index([appliedBy])
+}
+
+model Customer {
+  id           String @id @default(uuid())
+  restaurantId String
+
+  name  String
+  phone String
+  email String?
+
+  isActive Boolean @default(true)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+
+  bills          Bill[]
+  loyaltyAccount LoyaltyAccount?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, phone])
+  @@index([restaurantId, name])
+  @@index([restaurantId, isActive])
+}
+
+model LoyaltyAccount {
+  id         String @id @default(uuid())
+  customerId String @unique
+
+  pointsBalance Int @default(0)
+
+  isActive Boolean @default(true)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  transactions LoyaltyTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model LoyaltyTransaction {
+  id        String  @id @default(uuid())
+  accountId String
+  billId    String?
+
+  type   LoyaltyTransactionType
+  points Int
+
+  description String?
+
+  idempotencyKey String
+  performedBy    String?
+
+  account LoyaltyAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  bill    Bill?          @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, idempotencyKey])
+  @@index([accountId, createdAt])
+  @@index([billId])
+  @@index([type, createdAt])
 }
 
 model PaymentCallbackEvent {
@@ -618,4 +739,25 @@ model StockDeduction {
 
   @@unique([orderItemId, inventoryItemId])
   @@index([inventoryItemId])
+}
+
+model OrderStatusHistory {
+  id           String @id @default(uuid())
+  restaurantId String
+  orderId      String
+  performedBy  String
+
+  fromStatus OrderStatus
+  toStatus   OrderStatus
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user       User       @relation(fields: [performedBy], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@index([orderId, createdAt])
+  @@index([performedBy, createdAt])
+  @@index([restaurantId, toStatus, createdAt])
 }

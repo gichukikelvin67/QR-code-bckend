@@ -98,7 +98,8 @@ export async function updateRestaurantOrderStatus(
   restaurantId,
   orderId,
   newStatus,
-  userRole
+  userRole,
+  userId
 ) {
   return prisma.$transaction(
     async (tx) => {
@@ -387,6 +388,17 @@ const deductions =
           409
         );
       }
+
+      // Record the staff member responsible for this transition.
+await tx.orderStatusHistory.create({
+  data: {
+    restaurantId,
+    orderId,
+    performedBy: userId,
+    fromStatus: order.status,
+    toStatus: newStatus,
+  },
+});
 
       return tx.order.findFirst({
         where: {

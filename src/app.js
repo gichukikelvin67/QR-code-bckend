@@ -19,6 +19,9 @@ import mpesaRoutes from "./modules/payments/mpesa.routes.js";
 import inventoryRoutes from "./modules/inventory/inventory.routes.js";
 import recipeRoutes from "./modules/recipes/recipe.routes.js";
 import discountRoutes from "./modules/discounts/discount.routes.js";
+import refundRoutes from "./modules/refunds/refund.routes.js";
+import loyaltyRoutes from "./modules/loyalty/loyalty.routes.js";
+import analyticsRoutes from "./modules/analytics/analytics.routes.js";
 import { env } from "./config/env.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -70,6 +73,9 @@ app.use("/api/payments/mpesa", mpesaRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/recipes", recipeRoutes);
 app.use("/api/discounts",discountRoutes);
+app.use("/api/refunds",refundRoutes);
+app.use("/api/loyalty", loyaltyRoutes);
+app.use("/api/analytics", analyticsRoutes);
 
 
 app.use(notFoundHandler);
