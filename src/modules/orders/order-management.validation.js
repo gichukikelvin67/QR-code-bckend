@@ -17,12 +17,12 @@ export const orderListQuerySchema = z.object({
     ])
     .optional(),
 });
-
 export const updateOrderStatusSchema = z.object({
   status: z.enum([
     "ACCEPTED",
     "PREPARING",
     "READY",
     "SERVED",
+    "CANCELLED",
   ]),
 });

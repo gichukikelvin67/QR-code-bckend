@@ -80,6 +80,16 @@ enum PaymentStatus {
   REVERSED
 }
 
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum DiscountStatus {
+  APPLIED
+  REVERSED
+}
+
 model Restaurant {
   id       String  @id @default(uuid())
   name     String
@@ -100,6 +110,7 @@ model Restaurant {
   suppliers           Supplier[]
   stockMovements      StockMovement[]
   stockReceipts       StockReceipt[]
+  discounts           Discount[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -287,11 +298,12 @@ model Bill {
   amountPaid Decimal @default(0) @db.Decimal(12, 2)
   balance    Decimal @db.Decimal(12, 2)
 
-  restaurant Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  session    DiningSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-
-  items    BillItem[]
-  payments Payment[]
+  restaurant     Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  session        DiningSession @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  discountAmount Decimal       @default(0) @db.Decimal(12, 2)
+  discounts      Discount[]
+  items          BillItem[]
+  payments       Payment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -351,6 +363,37 @@ model BillItem {
 
   @@unique([billId, orderItemId])
   @@index([orderItemId])
+}
+
+model Discount {
+  id           String @id @default(uuid())
+  restaurantId String
+  billId       String
+
+  type   DiscountType
+  value  Decimal      @db.Decimal(12, 2)
+  amount Decimal      @db.Decimal(12, 2)
+  reason String
+
+  status DiscountStatus @default(APPLIED)
+
+  approvedBy String
+  appliedBy  String
+
+  reversedBy     String?
+  reversedAt     DateTime?
+  reversalReason String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  bill       Bill       @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, createdAt])
+  @@index([billId, status])
+  @@index([approvedBy])
+  @@index([appliedBy])
 }
 
 model PaymentCallbackEvent {
@@ -567,7 +610,8 @@ model StockDeduction {
 
   quantity Decimal @db.Decimal(14, 3)
 
-  deductedAt DateTime @default(now())
+  deductedAt DateTime  @default(now())
+  restoredAt DateTime?
 
   orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
   inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)

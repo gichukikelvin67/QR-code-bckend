@@ -4,6 +4,7 @@ import {
   getRestaurantOrderById,
   updateRestaurantOrderStatus,
 } from "./order-management.service.js";
+import { getSocketInstance } from "../../sockets/socket-instance.js";
 
 export async function getOrdersController(req, res, next) {
   try {
@@ -38,11 +39,8 @@ export async function getOrderController(req, res, next) {
   }
 }
 
-export async function updateOrderStatusController(
-  req,
-  res,
-  next
-) {
+
+export async function updateOrderStatusController(req, res, next) {
   try {
     const order = await updateRestaurantOrderStatus(
       req.auth.restaurantId,
@@ -50,6 +48,28 @@ export async function updateOrderStatusController(
       req.body.status,
       req.auth.role
     );
+
+    const io = getSocketInstance();
+
+    if (io) {
+      const eventPayload = {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        tableNumber: order.session?.table?.tableNumber,
+        updatedAt: order.updatedAt,
+      };
+
+      const rooms = [
+        `restaurant:${req.auth.restaurantId}:kitchen`,
+        `restaurant:${req.auth.restaurantId}:bar`,
+        `restaurant:${req.auth.restaurantId}:service`,
+      ];
+
+      for (const room of rooms) {
+        io.to(room).emit("order:status-updated", eventPayload);
+      }
+    }
 
     res.status(200).json({
       success: true,
