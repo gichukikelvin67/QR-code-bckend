@@ -18,6 +18,7 @@ import barRoutes from "./modules/bar/bar.routes.js";
 import mpesaRoutes from "./modules/payments/mpesa.routes.js";
 import inventoryRoutes from "./modules/inventory/inventory.routes.js";
 import recipeRoutes from "./modules/recipes/recipe.routes.js";
+import discountRoutes from "./modules/discounts/discount.routes.js";
 import { env } from "./config/env.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -68,6 +69,7 @@ app.use("/api/billing", billingRoutes);
 app.use("/api/payments/mpesa", mpesaRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/recipes", recipeRoutes);
+app.use("/api/discounts",discountRoutes);
 
 
 app.use(notFoundHandler);
