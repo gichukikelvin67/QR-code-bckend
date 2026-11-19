@@ -1,6 +1,8 @@
 
 import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
+import { createAuditLog } from "../audits/audit.service.js";
+
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -397,6 +399,21 @@ await tx.orderStatusHistory.create({
     performedBy: userId,
     fromStatus: order.status,
     toStatus: newStatus,
+  },
+});
+
+await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: newStatus === "CANCELLED" ? "ORDER_CANCELLED" : "ORDER_STATUS_CHANGED",
+  resource: "ORDER",
+  resourceId: orderId,
+  description: `Order ${order.orderNumber} changed from ${order.status} to ${newStatus}.`,
+  metadata: {
+    orderNumber: order.orderNumber,
+    previousStatus: order.status,
+    newStatus,
   },
 });
 

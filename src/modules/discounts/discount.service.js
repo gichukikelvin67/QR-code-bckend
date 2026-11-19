@@ -1,6 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
+import { createAuditLog } from "../audits/audit.service.js";
 
 const createError = (message, statusCode = 400) => {
   const error = new Error(message);
@@ -161,6 +162,25 @@ export const applyDiscount = async ({
         },
       });
 
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "DISCOUNT_APPLIED",
+  resource: "DISCOUNT",
+  resourceId: discount.id,
+  description: `A discount was applied to bill ${billId}.`,
+  metadata: {
+    billId,
+    discountType: type,
+    discountValue: discountValue.toString(),
+    discountAmount: discountAmount.toString(),
+    reason,
+    previousTotal: currentTotal.toString(),
+    newTotal: newBillTotal.toString(),
+  },
+});
+
       return {
         discount,
         bill: updatedBill,
@@ -253,6 +273,23 @@ export const reverseDiscount = async ({
           status: "OPEN",
         },
       });
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "DISCOUNT_REVERSED",
+  resource: "DISCOUNT",
+  resourceId: discountId,
+  description: `Discount on bill ${bill.id} was reversed.`,
+  metadata: {
+    billId: bill.id,
+    discountType: discount.type,
+    discountAmount: discount.amount.toString(),
+    originalReason: discount.reason,
+    reversalReason: reason,
+    restoredBillTotal: newBillTotal.toString(),
+  },
+});
 
       return {
         discount: updatedDiscount,

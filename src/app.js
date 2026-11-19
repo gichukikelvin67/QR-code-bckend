@@ -22,6 +22,7 @@ import discountRoutes from "./modules/discounts/discount.routes.js";
 import refundRoutes from "./modules/refunds/refund.routes.js";
 import loyaltyRoutes from "./modules/loyalty/loyalty.routes.js";
 import analyticsRoutes from "./modules/analytics/analytics.routes.js";
+import auditRoutes from "./modules/audits/audit.routes.js";
 import { env } from "./config/env.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -76,6 +77,8 @@ app.use("/api/discounts",discountRoutes);
 app.use("/api/refunds",refundRoutes);
 app.use("/api/loyalty", loyaltyRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/audits", auditRoutes);
+
 
 
 app.use(notFoundHandler);

@@ -129,6 +129,7 @@ model Restaurant {
   refunds             Refund[]
   customers           Customer[]
   orderStatusHistory  OrderStatusHistory[]
+  auditLogs           AuditLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -144,6 +145,7 @@ model User {
   memberships        Membership[]
   refreshSessions    RefreshSession[]
   orderStatusActions OrderStatusHistory[]
+  auditLogs          AuditLog[]
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
 }
@@ -760,4 +762,30 @@ model OrderStatusHistory {
   @@index([orderId, createdAt])
   @@index([performedBy, createdAt])
   @@index([restaurantId, toStatus, createdAt])
+}
+
+model AuditLog {
+  id           String  @id @default(uuid())
+  restaurantId String
+  userId       String?
+
+  action      String
+  resource    String
+  resourceId  String?
+  description String?
+
+  metadata Json?
+
+  ipAddress String?
+  userAgent String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  user       User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, action, createdAt])
+  @@index([restaurantId, resource, createdAt])
+  @@index([userId, createdAt])
 }

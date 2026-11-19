@@ -15,6 +15,7 @@ import {
   refundIdParamsSchema,
   paymentIdParamsSchema,
   rejectRefundSchema,
+  completeRefundSchema,
 } from "./refund.validation.js";
 
 import {
@@ -91,18 +92,12 @@ router.patch(
 );
 
 // Record externally confirmed refund completion
+
 router.patch(
   "/:refundId/complete",
   managersOnly,
   validate(refundIdParamsSchema, "params"),
-  validate(
-    rejectRefundSchema.pick({
-      reason: true,
-    }).extend({
-      providerReference: rejectRefundSchema.shape.reason,
-    })
-  ),
+  validate(completeRefundSchema),
   completeRefundController
 );
-
 export default router;

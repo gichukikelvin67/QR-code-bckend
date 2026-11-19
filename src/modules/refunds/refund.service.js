@@ -1,6 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
+import { createAuditLog } from "../audits/audit.service.js";
 
 const createError = (message, statusCode = 400) => {
   const error = new Error(message);
@@ -123,6 +124,21 @@ export const requestRefund = async ({
           status: "PENDING",
         },
       });
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "REFUND_REQUESTED",
+  resource: "REFUND",
+  resourceId: refund.id,
+  description: `Refund requested for payment ${paymentId}.`,
+  metadata: {
+    paymentId,
+    amount: refund.amount.toString(),
+    reason,
+    status: refund.status,
+  },
+});
 
       return refund;
     },
@@ -183,6 +199,20 @@ export const approveRefund = async ({
           409
         );
       }
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "REFUND_APPROVED",
+  resource: "REFUND",
+  resourceId: refundId,
+  description: "Refund request approved and moved into processing.",
+  metadata: {
+    amount: refund.amount.toString(),
+    requestedBy: refund.requestedBy,
+    status: "PROCESSING",
+  },
+});
 
       return tx.refund.findUnique({
         where: {
@@ -201,6 +231,7 @@ export const completeRefund = async ({
   restaurantId,
   refundId,
   providerReference,
+  userId,
 }) => {
   return prisma.$transaction(
     async (tx) => {
@@ -315,6 +346,21 @@ export const completeRefund = async ({
           status: newBillStatus,
         },
       });
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "REFUND_MARKED_COMPLETED",
+  resource: "REFUND",
+  resourceId: refundId,
+  description: "Refund was marked completed in the system.",
+  metadata: {
+    paymentId: payment.id,
+    billId: bill.id,
+    amount: refund.amount.toString(),
+    providerReference: providerReference.trim(),
+  },
+});
 
       // Mark the original payment REVERSED only when
       // the entire payment amount has been refunded.
@@ -388,6 +434,22 @@ export const rejectRefund = async ({
           rejectionReason: reason,
         },
       });
+
+      await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "REFUND_REJECTED",
+  resource: "REFUND",
+  resourceId: refundId,
+  description: "Refund request was rejected.",
+  metadata: {
+    amount: refund.amount.toString(),
+    requestedBy: refund.requestedBy,
+    rejectionReason: reason,
+    status: "REJECTED",
+  },
+});
 
       if (result.count !== 1) {
         throw createError(

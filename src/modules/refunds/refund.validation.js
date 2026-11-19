@@ -46,3 +46,10 @@ export const rejectRefundSchema = z.object({
     .min(3, "Please provide a rejection reason.")
     .max(250, "Reason cannot exceed 250 characters."),
 });
+export const completeRefundSchema = z.object({
+  providerReference: z
+    .string()
+    .trim()
+    .min(3, "A valid provider reference is required.")
+    .max(150, "Provider reference cannot exceed 150 characters."),
+});

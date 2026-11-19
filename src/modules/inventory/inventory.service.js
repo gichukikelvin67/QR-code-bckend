@@ -1,5 +1,6 @@
 
 import prisma from "../../config/database.js";
+import { createAuditLog } from "../audits/audit.service.js";
 
 const createError = (message, statusCode = 400) => {
   const error = new Error(message);
@@ -13,8 +14,7 @@ const pagination = (page, limit) => ({
   skip: (page - 1) * limit,
   take: limit,
 });
-
-export const createInventoryCategory = async (restaurantId, data) => {
+export const createInventoryCategory = async (restaurantId, userId, data) => {
   const existing = await prisma.inventoryCategory.findFirst({
     where: {
       restaurantId,
@@ -26,12 +26,29 @@ export const createInventoryCategory = async (restaurantId, data) => {
     throw createError("An inventory category with this name already exists.", 409);
   }
 
-  return prisma.inventoryCategory.create({
-    data: {
+  return prisma.$transaction(async (tx) => {
+    const category = await tx.inventoryCategory.create({
+      data: {
+        restaurantId,
+        name: data.name,
+        description: data.description ?? null,
+      },
+    });
+
+    await createAuditLog({
+      tx,
       restaurantId,
-      name: data.name,
-      description: data.description ?? null,
-    },
+      userId,
+      action: "INVENTORY_CATEGORY_CREATED",
+      resource: "INVENTORY_CATEGORY",
+      resourceId: category.id,
+      description: `Created inventory category: ${category.name}`,
+      metadata: {
+        name: category.name,
+      },
+    });
+
+    return category;
   });
 };
 
@@ -47,6 +64,7 @@ export const listInventoryCategories = async (restaurantId) => {
 
 export const updateInventoryCategory = async (
   restaurantId,
+  userId,
   categoryId,
   data
 ) => {
@@ -72,14 +90,32 @@ export const updateInventoryCategory = async (
     }
   }
 
-  return prisma.inventoryCategory.update({
-    where: { id: categoryId },
-    data,
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.inventoryCategory.update({
+      where: { id: categoryId },
+      data,
+    });
+
+    await createAuditLog({
+      tx,
+      restaurantId,
+      userId,
+      action: "INVENTORY_CATEGORY_UPDATED",
+      resource: "INVENTORY_CATEGORY",
+      resourceId: categoryId,
+      description: `Updated inventory category: ${updated.name}`,
+      metadata: {
+        previousName: category.name,
+        newName: updated.name,
+      },
+    });
+
+    return updated;
   });
 };
 
 
-export const createInventoryItem = async (restaurantId, data) => {
+export const createInventoryItem = async (restaurantId, userId, data) => {
   if (data.categoryId) {
     const category = await prisma.inventoryCategory.findFirst({
       where: {
@@ -132,15 +168,31 @@ export const createInventoryItem = async (restaurantId, data) => {
           stockAfter: initialStock,
           referenceId: "INITIAL_STOCK",
           notes: "Opening inventory balance",
+          performedBy: userId,
         },
       });
     }
 
+    await createAuditLog({
+      tx,
+      restaurantId,
+      userId,
+      action: "INVENTORY_ITEM_CREATED",
+      resource: "INVENTORY_ITEM",
+      resourceId: item.id,
+      description: `Created inventory item: ${item.name}`,
+      metadata: {
+        name: item.name,
+        sku: item.sku,
+        unit: item.unit,
+        initialStock,
+        categoryId: item.categoryId,
+      },
+    });
+
     return item;
   });
 };
-
-
 
 
 export const listInventoryItems = async (restaurantId, filters) => {
@@ -254,6 +306,7 @@ export const getInventoryItem = async (restaurantId, itemId) => {
 
 export const updateInventoryItem = async (
   restaurantId,
+  userId,
   itemId,
   data
 ) => {
@@ -289,24 +342,59 @@ export const updateInventoryItem = async (
     }
   }
 
-  return prisma.inventoryItem.update({
-    where: { id: itemId },
-    data,
-  });
-};
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.inventoryItem.update({
+      where: { id: itemId },
+      data,
+    });
 
-export const createSupplier = async (restaurantId, data) => {
-  return prisma.supplier.create({
-    data: {
+    await createAuditLog({
+      tx,
       restaurantId,
-      name: data.name,
-      phone: data.phone ?? null,
-      email: data.email ?? null,
-      address: data.address ?? null,
-    },
+      userId,
+      action: "INVENTORY_ITEM_UPDATED",
+      resource: "INVENTORY_ITEM",
+      resourceId: itemId,
+      description: `Updated inventory item: ${updated.name}`,
+      metadata: {
+        previousName: item.name,
+        newName: updated.name,
+        previousSku: item.sku,
+        newSku: updated.sku,
+        previousReorderLevel: Number(item.reorderLevel),
+        newReorderLevel: Number(updated.reorderLevel),
+      },
+    });
+
+    return updated;
   });
 };
+export const createSupplier = async (restaurantId, userId, data) => {
+  return prisma.$transaction(async (tx) => {
+    
+const supplier = await createSupplier(
+  req.auth.restaurantId,
+  req.auth.userId,
+  req.body
+);
+    await createAuditLog({
+      tx,
+      restaurantId,
+      userId,
+      action: "SUPPLIER_CREATED",
+      resource: "SUPPLIER",
+      resourceId: supplier.id,
+      description: `Created supplier: ${supplier.name}`,
+      metadata: {
+        name: supplier.name,
+        phone: supplier.phone,
+        email: supplier.email,
+      },
+    });
 
+    return supplier;
+  });
+};
 export const listSuppliers = async (restaurantId) => {
   return prisma.supplier.findMany({
     where: { restaurantId },
@@ -314,18 +402,44 @@ export const listSuppliers = async (restaurantId) => {
   });
 };
 
-export const updateSupplier = async (restaurantId, supplierId, data) => {
-  const supplier = await prisma.supplier.findFirst({
-    where: { id: supplierId, restaurantId },
-  });
+export const updateSupplier = async (
+  restaurantId,
+  userId,
+  supplierId,
+  data
+) => {
+  const supplier = await updateSupplier(
+  req.auth.restaurantId,
+  req.auth.userId,
+  req.params.supplierId,
+  req.body
+);
 
   if (!supplier) {
     throw createError("Supplier not found.", 404);
   }
 
-  return prisma.supplier.update({
-    where: { id: supplierId },
-    data,
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.supplier.update({
+      where: { id: supplierId },
+      data,
+    });
+
+    await createAuditLog({
+      tx,
+      restaurantId,
+      userId,
+      action: "SUPPLIER_UPDATED",
+      resource: "SUPPLIER",
+      resourceId: supplierId,
+      description: `Updated supplier: ${updated.name}`,
+      metadata: {
+        previousName: supplier.name,
+        newName: updated.name,
+      },
+    });
+
+    return updated;
   });
 };
 
@@ -416,6 +530,21 @@ export const receiveStock = async (restaurantId, userId, data) => {
         },
       });
     }
+    await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "INVENTORY_STOCK_RECEIVED",
+  resource: "STOCK_RECEIPT",
+  resourceId: receipt.id,
+  description: `Received stock under receipt ${receipt.id}`,
+  metadata: {
+    supplierId: data.supplierId ?? null,
+    reference: data.reference ?? null,
+    itemCount: data.items.length,
+    totalCost,
+  },
+});
 
     return tx.stockReceipt.update({
       where: { id: receipt.id },
@@ -507,6 +636,24 @@ export const adjustStock = async (restaurantId, userId, data) => {
         performedBy: userId,
       },
     });
+    await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "INVENTORY_STOCK_ADJUSTED",
+  resource: "INVENTORY_ITEM",
+  resourceId: item.id,
+  description: `Stock adjusted for ${updatedItem.name}`,
+  metadata: {
+    movementId: movement.id,
+    movementType: data.type,
+    quantity,
+    stockBefore,
+    stockAfter,
+    reference: data.reference ?? null,
+    notes: data.notes ?? null,
+  },
+});
 
     return {
       item: updatedItem,

@@ -20,6 +20,7 @@ export const createInventoryCategoryController = async (req, res, next) => {
   try {
     const category = await createInventoryCategory(
       req.auth.restaurantId,
+      req.auth.userId,
       req.body
     );
 
@@ -47,6 +48,7 @@ export const updateInventoryCategoryController = async (req, res, next) => {
   try {
     const category = await updateInventoryCategory(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.categoryId,
       req.body
     );
@@ -65,6 +67,7 @@ export const createInventoryItemController = async (req, res, next) => {
   try {
     const item = await createInventoryItem(
       req.auth.restaurantId,
+      req.auth.userId,
       req.body
     );
 
@@ -108,6 +111,7 @@ export const updateInventoryItemController = async (req, res, next) => {
   try {
     const item = await updateInventoryItem(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.itemId,
       req.body
     );

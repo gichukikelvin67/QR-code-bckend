@@ -50,10 +50,11 @@ export const approveRefundController = async (req, res, next) => {
 export const completeRefundController = async (req, res, next) => {
   try {
     const refund = await completeRefund({
-      restaurantId: req.auth.restaurantId,
-      refundId: req.params.refundId,
-      providerReference: req.body.providerReference,
-    });
+  restaurantId: req.auth.restaurantId,
+  refundId: req.params.refundId,
+  providerReference: req.body.providerReference,
+  userId: req.auth.userId,
+});
 
     return res.status(200).json({
       success: true,
