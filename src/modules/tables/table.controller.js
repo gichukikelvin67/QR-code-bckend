@@ -1,4 +1,5 @@
 
+
 import {
   createTable,
   getRestaurantTables,
@@ -11,6 +12,7 @@ export async function createTableController(req, res, next) {
   try {
     const table = await createTable(
       req.auth.restaurantId,
+      req.auth.userId,
       req.body
     );
 
@@ -58,6 +60,7 @@ export async function updateTableController(req, res, next) {
   try {
     const table = await updateTable(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.tableId,
       req.body
     );

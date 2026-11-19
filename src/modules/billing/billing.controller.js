@@ -1,11 +1,14 @@
-import { sessionIdParamsSchema ,
+
+import {
+  sessionIdParamsSchema,
   billIdParamsSchema,
   listBillsQuerySchema,
   splitBillSchema,
   createPaymentSchema,
 } from "./billing.validation.js";
 
-import { generateSessionBill ,
+import {
+  generateSessionBill,
   listRestaurantBills,
   getRestaurantBillById,
   splitBill,
@@ -14,9 +17,7 @@ import { generateSessionBill ,
 
 export async function generateBillController(req, res, next) {
   try {
-    const validation = sessionIdParamsSchema.safeParse(
-      req.params
-    );
+    const validation = sessionIdParamsSchema.safeParse(req.params);
 
     if (!validation.success) {
       return res.status(400).json({
@@ -28,6 +29,7 @@ export async function generateBillController(req, res, next) {
 
     const bill = await generateSessionBill({
       restaurantId: req.auth.restaurantId,
+      userId: req.auth.userId,
       sessionId: validation.data.sessionId,
     });
 
@@ -85,6 +87,7 @@ export const splitBillController = async (req, res, next) => {
 
     const result = await splitBill({
       restaurantId: req.auth.restaurantId,
+      userId: req.auth.userId,
       billId,
       items,
     });
@@ -102,11 +105,11 @@ export const splitBillController = async (req, res, next) => {
 export const recordPaymentController = async (req, res, next) => {
   try {
     const { billId } = billIdParamsSchema.parse(req.params);
-
     const payload = createPaymentSchema.parse(req.body);
 
     const result = await recordBillPayment({
       restaurantId: req.auth.restaurantId,
+      userId: req.auth.userId,
       billId,
       ...payload,
     });

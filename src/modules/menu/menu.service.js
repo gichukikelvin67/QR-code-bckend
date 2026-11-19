@@ -1,5 +1,6 @@
 
 import prisma from "../../config/database.js";
+import { createAuditLog } from "../audits/audit.service.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -7,25 +8,62 @@ function createError(message, statusCode = 400) {
   return error;
 }
 
+function getChangedFields(previous, updated) {
+  const changed = {};
+
+  for (const key of Object.keys(updated)) {
+    if (String(previous[key] ?? "") !== String(updated[key] ?? "")) {
+      changed[key] = {
+        previous: previous[key],
+        updated: updated[key],
+      };
+    }
+  }
+
+  return changed;
+}
+
+function handleDuplicateError(error, message) {
+  if (error.code === "P2002") {
+    throw createError(message, 409);
+  }
+
+  throw error;
+}
+
 // CATEGORY OPERATIONS
 
-export async function createCategory(restaurantId, data) {
+export async function createCategory(restaurantId, userId, data) {
   try {
-    return await prisma.menuCategory.create({
-      data: {
+    return await prisma.$transaction(async (tx) => {
+      const category = await tx.menuCategory.create({
+        data: {
+          restaurantId,
+          ...data,
+        },
+      });
+
+      await createAuditLog({
+        tx,
         restaurantId,
-        ...data,
-      },
+        userId,
+        action: "MENU_CATEGORY_CREATED",
+        resource: "MENU_CATEGORY",
+        resourceId: category.id,
+        description: `Created menu category ${category.name}.`,
+        metadata: {
+          categoryName: category.name,
+          sortOrder: category.sortOrder,
+        },
+      });
+
+      return category;
     });
   } catch (error) {
-    if (error.code === "P2002") {
-      throw createError(
-        "A category with this name already exists.",
-        409
-      );
-    }
-
-    throw error;
+    handleDuplicateError(
+      error,
+      "A category with this name already exists."
+    );
   }
 }
 
@@ -46,64 +84,103 @@ export async function getCategories(restaurantId) {
 
 export async function updateCategory(
   restaurantId,
+  userId,
   categoryId,
   data
 ) {
-  const category = await prisma.menuCategory.findFirst({
-    where: {
-      id: categoryId,
-      restaurantId,
-    },
-  });
-
-  if (!category) {
-    throw createError("Menu category not found.", 404);
-  }
-
   try {
-    return await prisma.menuCategory.update({
-      where: { id: categoryId },
-      data,
+    return await prisma.$transaction(async (tx) => {
+      const existingCategory = await tx.menuCategory.findFirst({
+        where: {
+          id: categoryId,
+          restaurantId,
+        },
+      });
+
+      if (!existingCategory) {
+        throw createError("Menu category not found.", 404);
+      }
+
+      const updatedCategory = await tx.menuCategory.update({
+        where: { id: categoryId },
+        data,
+      });
+
+      const changes = getChangedFields(existingCategory, data);
+
+      if (Object.keys(changes).length > 0) {
+        await createAuditLog({
+          tx,
+          restaurantId,
+          userId,
+          action: "MENU_CATEGORY_UPDATED",
+          resource: "MENU_CATEGORY",
+          resourceId: categoryId,
+          description: `Updated menu category ${updatedCategory.name}.`,
+          metadata: {
+            changes,
+          },
+        });
+      }
+
+      return updatedCategory;
     });
   } catch (error) {
-    if (error.code === "P2002") {
-      throw createError(
-        "A category with this name already exists.",
-        409
-      );
-    }
-
-    throw error;
+    handleDuplicateError(
+      error,
+      "A category with this name already exists."
+    );
   }
 }
 
 // MENU ITEM OPERATIONS
 
-export async function createMenuItem(restaurantId, data) {
-  const category = await prisma.menuCategory.findFirst({
-    where: {
-      id: data.categoryId,
-      restaurantId,
-      isActive: true,
-    },
-  });
+export async function createMenuItem(restaurantId, userId, data) {
+  return prisma.$transaction(async (tx) => {
+    const category = await tx.menuCategory.findFirst({
+      where: {
+        id: data.categoryId,
+        restaurantId,
+        isActive: true,
+      },
+    });
 
-  if (!category) {
-    throw createError(
-      "The selected category does not exist or is inactive.",
-      404
-    );
-  }
+    if (!category) {
+      throw createError(
+        "The selected category does not exist or is inactive.",
+        404
+      );
+    }
 
-  return prisma.menuItem.create({
-    data: {
-      ...data,
+    const item = await tx.menuItem.create({
+      data: {
+        ...data,
+        restaurantId,
+        price: String(data.price),
+      },
+      include: {
+        category: true,
+      },
+    });
+
+    await createAuditLog({
+      tx,
       restaurantId,
-      price: String(data.price),
-    },
-    include: {
-      category: true,
-    },
+      userId,
+      action: "MENU_ITEM_CREATED",
+      resource: "MENU_ITEM",
+      resourceId: item.id,
+      description: `Created menu item ${item.name}.`,
+      metadata: {
+        itemName: item.name,
+        categoryId: item.categoryId,
+        price: String(item.price),
+        station: item.station,
+        isAvailable: item.isAvailable,
+      },
+    });
+
+    return item;
   });
 }
 
@@ -156,39 +233,77 @@ export async function getMenuItemById(restaurantId, itemId) {
 
 export async function updateMenuItem(
   restaurantId,
+  userId,
   itemId,
   data
 ) {
-  await getMenuItemById(restaurantId, itemId);
-
-  if (data.categoryId) {
-    const category = await prisma.menuCategory.findFirst({
+  return prisma.$transaction(async (tx) => {
+    const existingItem = await tx.menuItem.findFirst({
       where: {
-        id: data.categoryId,
+        id: itemId,
         restaurantId,
-        isActive: true,
       },
     });
 
-    if (!category) {
-      throw createError(
-        "The selected category does not exist or is inactive.",
-        404
-      );
+    if (!existingItem) {
+      throw createError("Menu item not found.", 404);
     }
-  }
 
-  const updateData = { ...data };
+    if (data.categoryId) {
+      const category = await tx.menuCategory.findFirst({
+        where: {
+          id: data.categoryId,
+          restaurantId,
+          isActive: true,
+        },
+      });
 
-  if (updateData.price !== undefined) {
-    updateData.price = String(updateData.price);
-  }
+      if (!category) {
+        throw createError(
+          "The selected category does not exist or is inactive.",
+          404
+        );
+      }
+    }
 
-  return prisma.menuItem.update({
-    where: { id: itemId },
-    data: updateData,
-    include: {
-      category: true,
-    },
+    const updateData = { ...data };
+
+    if (updateData.price !== undefined) {
+      updateData.price = String(updateData.price);
+    }
+
+    const updatedItem = await tx.menuItem.update({
+      where: { id: itemId },
+      data: updateData,
+      include: {
+        category: true,
+      },
+    });
+
+    const changes = getChangedFields(existingItem, updateData);
+
+    if (Object.keys(changes).length > 0) {
+      const action = Object.hasOwn(changes, "price")
+        ? "MENU_ITEM_PRICE_UPDATED"
+        : Object.hasOwn(changes, "isAvailable")
+          ? "MENU_ITEM_AVAILABILITY_UPDATED"
+          : "MENU_ITEM_UPDATED";
+
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action,
+        resource: "MENU_ITEM",
+        resourceId: itemId,
+        description: `Updated menu item ${updatedItem.name}.`,
+        metadata: {
+          itemName: updatedItem.name,
+          changes,
+        },
+      });
+    }
+
+    return updatedItem;
   });
 }

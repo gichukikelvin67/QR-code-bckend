@@ -2,6 +2,7 @@
 import QRCode from "qrcode";
 import prisma from "../../config/database.js";
 import { env } from "../../config/env.js";
+import { createAuditLog } from "../audits/audit.service.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -9,17 +10,37 @@ function createError(message, statusCode = 400) {
   return error;
 }
 
-export async function createTable(restaurantId, data) {
+export async function createTable(
+  restaurantId,
+  userId,
+  data
+) {
   try {
-    const table = await prisma.restaurantTable.create({
-      data: {
-        restaurantId,
-        tableNumber: data.tableNumber,
-        capacity: data.capacity,
-      },
-    });
+    return await prisma.$transaction(async (tx) => {
+      const table = await tx.restaurantTable.create({
+        data: {
+          restaurantId,
+          tableNumber: data.tableNumber,
+          capacity: data.capacity,
+        },
+      });
 
-    return table;
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action: "TABLE_CREATED",
+        resource: "RESTAURANT_TABLE",
+        resourceId: table.id,
+        description: `Table ${table.tableNumber} was created.`,
+        metadata: {
+          tableNumber: table.tableNumber,
+          capacity: table.capacity,
+        },
+      });
+
+      return table;
+    });
   } catch (error) {
     if (error.code === "P2002") {
       throw createError(
@@ -74,13 +95,47 @@ export async function getTableById(restaurantId, tableId) {
   return table;
 }
 
-export async function updateTable(restaurantId, tableId, data) {
-  await getTableById(restaurantId, tableId);
+export async function updateTable(
+  restaurantId,
+  userId,
+  tableId,
+  data
+) {
+  const existingTable = await getTableById(
+    restaurantId,
+    tableId
+  );
 
   try {
-    return await prisma.restaurantTable.update({
-      where: { id: tableId },
-      data,
+    return await prisma.$transaction(async (tx) => {
+      const updatedTable = await tx.restaurantTable.update({
+        where: {
+          id: tableId,
+        },
+        data,
+      });
+
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action: "TABLE_UPDATED",
+        resource: "RESTAURANT_TABLE",
+        resourceId: tableId,
+        description: `Table ${updatedTable.tableNumber} was updated.`,
+        metadata: {
+          previous: {
+            tableNumber: existingTable.tableNumber,
+            capacity: existingTable.capacity,
+          },
+          updated: {
+            tableNumber: updatedTable.tableNumber,
+            capacity: updatedTable.capacity,
+          },
+        },
+      });
+
+      return updatedTable;
     });
   } catch (error) {
     if (error.code === "P2002") {
@@ -94,7 +149,10 @@ export async function updateTable(restaurantId, tableId, data) {
   }
 }
 
-export async function generateTableQRCode(restaurantId, tableId) {
+export async function generateTableQRCode(
+  restaurantId,
+  tableId
+) {
   const [table, restaurant] = await Promise.all([
     getTableById(restaurantId, tableId),
     prisma.restaurant.findUnique({

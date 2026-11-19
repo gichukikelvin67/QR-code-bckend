@@ -1,6 +1,7 @@
 
 import { randomBytes } from "node:crypto";
 import prisma from "../../config/database.js";
+import { createAuditLog } from "../audits/audit.service.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -38,6 +39,7 @@ function generateBillNumber() {
 
 export async function generateSessionBill({
   restaurantId,
+  userId,
   sessionId,
 }) {
   try {
@@ -199,6 +201,22 @@ export async function generateSessionBill({
             },
           },
         });
+        await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "BILL_GENERATED",
+  resource: "BILL",
+  resourceId: bill.id,
+  description: `Generated bill ${bill.billNumber}`,
+  metadata: {
+    billNumber: bill.billNumber,
+    sessionId: session.id,
+    tableNumber: session.table.tableNumber,
+    total: String(bill.total),
+    itemCount: billItems.length,
+  },
+});
 
         return bill;
       },
@@ -342,6 +360,7 @@ export const getRestaurantBillById = async ({
 
 export const splitBill = async ({
   restaurantId,
+  userId,
   billId,
   items,
 }) => {
@@ -556,6 +575,25 @@ export const splitBill = async ({
             payments: true,
           },
         });
+        await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "BILL_SPLIT",
+  resource: "BILL",
+  resourceId: originalBill.id,
+  description: `Split bill ${originalBill.billNumber}`,
+  metadata: {
+    originalBillId: originalBill.id,
+    originalBillNumber: originalBill.billNumber,
+    newBillId: newBill.id,
+    newBillNumber: newBill.billNumber,
+    transferredItems: newBillItems.length,
+    originalTotalBefore: String(originalBill.total),
+    originalTotalAfter: remainingTotal,
+    newBillTotal: newBillTotal,
+  },
+});
 
         return {
           originalBill: updatedOriginalBill,
@@ -580,6 +618,7 @@ export const splitBill = async ({
 
 export const recordBillPayment = async ({
   restaurantId,
+  userId,
   billId,
   method,
   amount,
@@ -717,6 +756,25 @@ export const recordBillPayment = async ({
             },
           });
         }
+
+        await createAuditLog({
+  tx,
+  restaurantId,
+  userId,
+  action: "PAYMENT_RECORDED",
+  resource: "PAYMENT",
+  resourceId: payment.id,
+  description: `${method} payment recorded for bill ${bill.billNumber}`,
+  metadata: {
+    billId: bill.id,
+    billNumber: bill.billNumber,
+    paymentMethod: method,
+    paymentAmount: formatMoney(amountCents),
+    paymentStatus: payment.status,
+    billStatus: updatedBill.status,
+    remainingBalance: String(updatedBill.balance),
+  },
+});
 
         return {
           payment,

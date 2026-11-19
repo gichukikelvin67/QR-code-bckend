@@ -1,5 +1,6 @@
 
 import prisma from "../../config/database.js";
+import { createAuditLog } from "../audits/audit.service.js";
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -7,7 +8,11 @@ function createError(message, statusCode = 400) {
   return error;
 }
 
-export async function openDiningSession(restaurantId, tableId) {
+export async function openDiningSession(
+  restaurantId,
+  userId,
+  tableId
+) {
   try {
     return await prisma.$transaction(
       async (tx) => {
@@ -46,8 +51,6 @@ export async function openDiningSession(restaurantId, tableId) {
           );
         }
 
-        // Compare-and-set prevents another request from changing
-        // the table status between our read and update.
         const updatedTable = await tx.restaurantTable.updateMany({
           where: {
             id: tableId,
@@ -66,7 +69,7 @@ export async function openDiningSession(restaurantId, tableId) {
           );
         }
 
-        return tx.diningSession.create({
+        const session = await tx.diningSession.create({
           data: {
             tableId,
           },
@@ -81,6 +84,24 @@ export async function openDiningSession(restaurantId, tableId) {
             },
           },
         });
+
+        await createAuditLog({
+          tx,
+          restaurantId,
+          userId,
+          action: "DINING_SESSION_OPENED",
+          resource: "DINING_SESSION",
+          resourceId: session.id,
+          description: `Dining session opened for table ${table.tableNumber}.`,
+          metadata: {
+            tableId: table.id,
+            tableNumber: table.tableNumber,
+            sessionId: session.id,
+            sessionStatus: session.status,
+          },
+        });
+
+        return session;
       },
       {
         isolationLevel: "Serializable",
@@ -148,7 +169,11 @@ export async function getDiningSessionById(restaurantId, sessionId) {
   return session;
 }
 
-export async function closeDiningSession(restaurantId, sessionId) {
+export async function closeDiningSession(
+  restaurantId,
+  userId,
+  sessionId
+) {
   return prisma.$transaction(async (tx) => {
     const session = await tx.diningSession.findFirst({
       where: {
@@ -170,13 +195,15 @@ export async function closeDiningSession(restaurantId, sessionId) {
       );
     }
 
+    const closedAt = new Date();
+
     const closedSession = await tx.diningSession.update({
       where: {
         id: sessionId,
       },
       data: {
         status: "CLOSED",
-        closedAt: new Date(),
+        closedAt,
       },
       include: {
         table: {
@@ -195,6 +222,24 @@ export async function closeDiningSession(restaurantId, sessionId) {
       },
       data: {
         status: "AVAILABLE",
+      },
+    });
+
+    await createAuditLog({
+      tx,
+      restaurantId,
+      userId,
+      action: "DINING_SESSION_CLOSED",
+      resource: "DINING_SESSION",
+      resourceId: session.id,
+      description: `Dining session closed for table ${session.table.tableNumber}.`,
+      metadata: {
+        tableId: session.tableId,
+        tableNumber: session.table.tableNumber,
+        sessionId: session.id,
+        startedAt: session.startedAt,
+        closedAt,
+        sessionStatus: "CLOSED",
       },
     });
 

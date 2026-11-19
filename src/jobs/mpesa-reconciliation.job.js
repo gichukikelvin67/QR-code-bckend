@@ -1,5 +1,6 @@
 
 import prisma from "../config/database.js";
+import { createAuditLog } from "../modules/audits/audit.service.js";
 import { reconcileMpesaPayment } from "../modules/payments/mpesa.service.js";
 
 const INTERVAL_MS = 60 * 1000;
@@ -7,6 +8,37 @@ const BATCH_SIZE = 20;
 
 let interval = null;
 let isRunning = false;
+
+const recordReconciliationAudit = async ({
+  payment,
+  action,
+  previousStatus,
+  newStatus,
+  description,
+}) => {
+  try {
+    await createAuditLog({
+      restaurantId: payment.restaurantId,
+      userId: null,
+      action,
+      resource: "PAYMENT",
+      resourceId: payment.id,
+      description,
+      metadata: {
+        paymentMethod: "MPESA",
+        verificationMethod: "STK_QUERY",
+        previousStatus,
+        newStatus,
+        source: "AUTOMATED_RECONCILIATION_JOB",
+      },
+    });
+  } catch (error) {
+    console.error(
+      `[M-PESA JOB] Audit logging failed for payment ${payment.id}:`,
+      error.message
+    );
+  }
+};
 
 const runMpesaReconciliation = async () => {
   if (isRunning) return;
@@ -30,6 +62,7 @@ const runMpesaReconciliation = async () => {
       select: {
         id: true,
         restaurantId: true,
+        status: true,
       },
       orderBy: {
         createdAt: "asc",
@@ -52,10 +85,46 @@ const runMpesaReconciliation = async () => {
           paymentId: payment.id,
         });
 
+        const newStatus = result.payment?.status || "UNKNOWN";
+
         console.log(
           `[M-PESA JOB] Payment ${payment.id}:`,
-          result.payment?.status || "UNKNOWN"
+          newStatus
         );
+
+        // Only audit meaningful status changes.
+        if (newStatus === payment.status) {
+          continue;
+        }
+
+        if (newStatus === "COMPLETED") {
+          await recordReconciliationAudit({
+            payment,
+            action: "MPESA_RECONCILIATION_COMPLETED",
+            previousStatus: payment.status,
+            newStatus,
+            description:
+              "Automated reconciliation confirmed an M-Pesa payment.",
+          });
+        } else if (newStatus === "FAILED") {
+          await recordReconciliationAudit({
+            payment,
+            action: "MPESA_RECONCILIATION_FAILED",
+            previousStatus: payment.status,
+            newStatus,
+            description:
+              "Automated reconciliation confirmed an unsuccessful M-Pesa payment.",
+          });
+        } else if (newStatus === "REVERSED") {
+          await recordReconciliationAudit({
+            payment,
+            action: "MPESA_PAYMENT_REVERSED",
+            previousStatus: payment.status,
+            newStatus,
+            description:
+              "Automated reconciliation detected a reversed M-Pesa payment.",
+          });
+        }
       } catch (error) {
         console.error(
           `[M-PESA JOB] Failed to reconcile payment ${payment.id}:`,
@@ -81,10 +150,8 @@ export const startMpesaReconciliationJob = () => {
 
   console.log("[M-PESA JOB] Starting reconciliation worker");
 
-  // Run once immediately.
   void runMpesaReconciliation();
 
-  // Continue checking every 60 seconds.
   interval = setInterval(() => {
     void runMpesaReconciliation();
   }, INTERVAL_MS);

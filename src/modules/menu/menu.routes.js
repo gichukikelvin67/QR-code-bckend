@@ -1,5 +1,6 @@
 
 import { Router } from "express";
+import { z } from "zod";
 
 import {
   createCategoryController,
@@ -23,24 +24,9 @@ import {
   authorize,
 } from "../auth/auth.middleware.js";
 
+import { validate } from "../../middleware/validate.middleware.js";
+
 const router = Router();
-
-function validate(schema) {
-  return (req, res, next) => {
-    const result = schema.safeParse(req.body);
-
-    if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed.",
-        errors: result.error.flatten(),
-      });
-    }
-
-    req.body = result.data;
-    next();
-  };
-}
 
 const managersOnly = authorize(
   "OWNER",
@@ -48,9 +34,23 @@ const managersOnly = authorize(
   "MANAGER"
 );
 
+const categoryIdParamsSchema = z.object({
+  categoryId: z.string().uuid(),
+});
+
+const itemIdParamsSchema = z.object({
+  itemId: z.string().uuid(),
+});
+
+const menuItemsQuerySchema = z.object({
+  categoryId: z.string().uuid().optional(),
+  availableOnly: z.enum(["true", "false"]).optional(),
+});
+
 router.use(authenticate);
 
 // CATEGORIES
+
 router.post(
   "/categories",
   managersOnly,
@@ -66,11 +66,13 @@ router.get(
 router.patch(
   "/categories/:categoryId",
   managersOnly,
+  validate(categoryIdParamsSchema, "params"),
   validate(updateCategorySchema),
   updateCategoryController
 );
 
 // MENU ITEMS
+
 router.post(
   "/items",
   managersOnly,
@@ -80,17 +82,20 @@ router.post(
 
 router.get(
   "/items",
+  validate(menuItemsQuerySchema, "query"),
   getMenuItemsController
 );
 
 router.get(
   "/items/:itemId",
+  validate(itemIdParamsSchema, "params"),
   getMenuItemController
 );
 
 router.patch(
   "/items/:itemId",
   managersOnly,
+  validate(itemIdParamsSchema, "params"),
   validate(updateMenuItemSchema),
   updateMenuItemController
 );

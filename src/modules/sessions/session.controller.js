@@ -10,6 +10,7 @@ export async function openSessionController(req, res, next) {
   try {
     const session = await openDiningSession(
       req.auth.restaurantId,
+      req.auth.userId,
       req.body.tableId
     );
 
@@ -59,6 +60,7 @@ export async function closeSessionController(req, res, next) {
   try {
     const session = await closeDiningSession(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.sessionId
     );
 

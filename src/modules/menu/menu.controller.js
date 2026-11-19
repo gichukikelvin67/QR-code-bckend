@@ -15,7 +15,8 @@ export async function createCategoryController(req, res, next) {
   try {
     const category = await createCategory(
       req.auth.restaurantId,
-      req.body
+      req.auth.userId,
+      req.validatedBody ?? req.body
     );
 
     res.status(201).json({
@@ -48,8 +49,9 @@ export async function updateCategoryController(req, res, next) {
   try {
     const category = await updateCategory(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.categoryId,
-      req.body
+      req.validatedBody ?? req.body
     );
 
     res.status(200).json({
@@ -68,7 +70,8 @@ export async function createMenuItemController(req, res, next) {
   try {
     const item = await createMenuItem(
       req.auth.restaurantId,
-      req.body
+      req.auth.userId,
+      req.validatedBody ?? req.body
     );
 
     res.status(201).json({
@@ -85,7 +88,7 @@ export async function getMenuItemsController(req, res, next) {
   try {
     const items = await getMenuItems(
       req.auth.restaurantId,
-      req.query
+      req.validatedQuery ?? req.query
     );
 
     res.status(200).json({
@@ -118,8 +121,9 @@ export async function updateMenuItemController(req, res, next) {
   try {
     const item = await updateMenuItem(
       req.auth.restaurantId,
+      req.auth.userId,
       req.params.itemId,
-      req.body
+      req.validatedBody ?? req.body
     );
 
     res.status(200).json({
