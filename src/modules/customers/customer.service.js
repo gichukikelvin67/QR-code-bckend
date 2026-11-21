@@ -1,7 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { createAuditLog } from "../audits/audit.service.js";
-
+import { Prisma } from "@prisma/client";
 function normalizeCustomerData(data) {
   const normalized = { ...data };
 
@@ -200,4 +200,121 @@ export async function updateCustomer(
   } catch (error) {
     handleDuplicatePhone(error);
   }
+}
+
+
+const CREDIT_MANAGEMENT_ROLES = ["OWNER", "ADMIN", "MANAGER"];
+
+export async function updateCustomerCredit(
+  restaurantId,
+  userId,
+  userRole,
+  customerId,
+  data
+) {
+  if (!CREDIT_MANAGEMENT_ROLES.includes(userRole)) {
+    const error = new Error(
+      "You are not authorized to manage customer credit facilities."
+    );
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return prisma.$transaction(
+    async (tx) => {
+      const customer = await tx.customer.findFirst({
+        where: {
+          id: customerId,
+          restaurantId,
+        },
+      });
+
+      if (!customer) {
+        throw customerNotFound();
+      }
+
+      if (!customer.isActive && data.allowCredit) {
+        const error = new Error(
+          "Credit cannot be enabled for an inactive customer."
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Calculate all outstanding bills belonging to this customer.
+      const outstandingResult = await tx.bill.aggregate({
+        where: {
+          restaurantId,
+          customerId,
+          status: {
+            in: ["OPEN", "PARTIALLY_PAID"],
+          },
+        },
+        _sum: {
+          balance: true,
+        },
+      });
+
+      const outstandingBalance =
+        outstandingResult._sum.balance ?? new Prisma.Decimal(0);
+
+      const requestedLimit = new Prisma.Decimal(data.creditLimit);
+
+      if (requestedLimit.lessThan(outstandingBalance)) {
+        const error = new Error(
+          `Credit limit cannot be lower than the customer's outstanding balance of ${outstandingBalance.toFixed(2)}.`
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      if (!data.allowCredit && outstandingBalance.greaterThan(0)) {
+        const error = new Error(
+          "Credit cannot be disabled while the customer has outstanding bills."
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const updatedCustomer = await tx.customer.update({
+        where: {
+          id: customerId,
+        },
+        data: {
+          allowCredit: data.allowCredit,
+          creditLimit: requestedLimit,
+        },
+      });
+
+      let action = "CUSTOMER_CREDIT_LIMIT_UPDATED";
+
+      if (!customer.allowCredit && data.allowCredit) {
+        action = "CUSTOMER_CREDIT_ENABLED";
+      } else if (customer.allowCredit && !data.allowCredit) {
+        action = "CUSTOMER_CREDIT_DISABLED";
+      }
+
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action,
+        resource: "CUSTOMER",
+        resourceId: customerId,
+        description: `Updated credit facility for ${customer.name}.`,
+        metadata: {
+          previousAllowCredit: customer.allowCredit,
+          newAllowCredit: updatedCustomer.allowCredit,
+          previousCreditLimit: customer.creditLimit.toString(),
+          newCreditLimit: updatedCustomer.creditLimit.toString(),
+          outstandingBalance: outstandingBalance.toString(),
+        },
+      });
+
+      return updatedCustomer;
+    },
+    {
+      isolationLevel: "Serializable",
+    }
+  );
 }

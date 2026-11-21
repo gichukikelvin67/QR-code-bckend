@@ -1,6 +1,7 @@
 
 import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
+import { createAuditLog } from "../audits/audit.service.js";
 
 const POINTS_PER_100_KES = 1;
 const KES_PER_POINT = 1;
@@ -12,13 +13,13 @@ const createError = (message, statusCode = 400) => {
   return error;
 };
 
-const normalizeKenyanPhone = (phone) => {
-  const digits = phone.replace(/\D/g, "");
-
-  if (digits.startsWith("254")) return `+${digits}`;
-  if (digits.startsWith("0")) return `+254${digits.slice(1)}`;
-
-  return `+${digits}`;
+const assertRole = (userRole, allowedRoles) => {
+  if (!allowedRoles.includes(userRole)) {
+    throw createError(
+      "You are not authorized to perform this loyalty operation.",
+      403
+    );
+  }
 };
 
 const getOrCreateAccount = async (tx, customerId) => {
@@ -29,122 +30,7 @@ const getOrCreateAccount = async (tx, customerId) => {
   });
 };
 
-// 1. Create a customer and loyalty account
-export const createCustomer = async ({
-  restaurantId,
-  name,
-  phone,
-  email,
-}) => {
-  const normalizedPhone = normalizeKenyanPhone(phone);
-
-  return prisma.$transaction(async (tx) => {
-    const existing = await tx.customer.findUnique({
-      where: {
-        restaurantId_phone: {
-          restaurantId,
-          phone: normalizedPhone,
-        },
-      },
-    });
-
-    if (existing) {
-      throw createError(
-        "A customer with this phone number already exists.",
-        409
-      );
-    }
-
-    const customer = await tx.customer.create({
-      data: {
-        restaurantId,
-        name,
-        phone: normalizedPhone,
-        email: email || null,
-        loyaltyAccount: {
-          create: {},
-        },
-      },
-      include: {
-        loyaltyAccount: true,
-      },
-    });
-
-    return customer;
-  });
-};
-
-// 2. List restaurant customers
-export const listCustomers = async ({ restaurantId }) => {
-  return prisma.customer.findMany({
-    where: { restaurantId },
-    include: {
-      loyaltyAccount: true,
-    },
-    orderBy: { createdAt: "desc" },
-  });
-};
-
-// 3. Get customer details
-export const getCustomerById = async ({
-  restaurantId,
-  customerId,
-}) => {
-  const customer = await prisma.customer.findFirst({
-    where: {
-      id: customerId,
-      restaurantId,
-    },
-    include: {
-      loyaltyAccount: true,
-    },
-  });
-
-  if (!customer) {
-    throw createError("Customer not found.", 404);
-  }
-
-  return customer;
-};
-
-// 4. Update customer
-export const updateCustomer = async ({
-  restaurantId,
-  customerId,
-  data,
-}) => {
-  await getCustomerById({ restaurantId, customerId });
-
-  const updateData = { ...data };
-
-  if (updateData.phone) {
-    updateData.phone = normalizeKenyanPhone(updateData.phone);
-  }
-
-  if (updateData.email === "") {
-    updateData.email = null;
-  }
-
-  try {
-    return await prisma.customer.update({
-      where: { id: customerId },
-      data: updateData,
-      include: {
-        loyaltyAccount: true,
-      },
-    });
-  } catch (error) {
-    if (error.code === "P2002") {
-      throw createError(
-        "A customer with this phone number already exists.",
-        409
-      );
-    }
-    throw error;
-  }
-};
-
-// 5. Award points after a verified completed payment
+// 1. Award points after a verified completed payment
 export const awardPointsForPayment = async ({
   restaurantId,
   paymentId,
@@ -207,6 +93,13 @@ export const awardPointsForPayment = async ({
 
       const account = await getOrCreateAccount(tx, customer.id);
 
+      if (!account.isActive) {
+        return {
+          awarded: false,
+          message: "The customer's loyalty account is inactive.",
+        };
+      }
+
       const idempotencyKey = `PAYMENT:${payment.id}`;
 
       const existing = await tx.loyaltyTransaction.findUnique({
@@ -246,6 +139,25 @@ export const awardPointsForPayment = async ({
         },
       });
 
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId: null,
+        action: "LOYALTY_POINTS_EARNED",
+        resource: "LOYALTY_ACCOUNT",
+        resourceId: account.id,
+        description: `Awarded ${points} loyalty points for a verified payment.`,
+        metadata: {
+          customerId: customer.id,
+          paymentId: payment.id,
+          billId: payment.billId,
+          pointsAwarded: points,
+          paymentAmount: payment.amount.toString(),
+          resultingBalance: updatedAccount.pointsBalance,
+          loyaltyTransactionId: transaction.id,
+        },
+      });
+
       return {
         awarded: true,
         points,
@@ -259,7 +171,7 @@ export const awardPointsForPayment = async ({
   );
 };
 
-// 6. Redeem points against an open bill
+// 2. Redeem points against an open bill
 export const redeemPoints = async ({
   restaurantId,
   customerId,
@@ -267,7 +179,16 @@ export const redeemPoints = async ({
   points,
   idempotencyKey,
   userId,
+  userRole,
 }) => {
+  assertRole(userRole, [
+    "OWNER",
+    "ADMIN",
+    "MANAGER",
+    "CASHIER",
+    "WAITER",
+  ]);
+
   return prisma.$transaction(
     async (tx) => {
       const customer = await tx.customer.findFirst({
@@ -283,6 +204,10 @@ export const redeemPoints = async ({
       }
 
       const account = await getOrCreateAccount(tx, customer.id);
+
+      if (!account.isActive) {
+        throw createError("This loyalty account is inactive.", 409);
+      }
 
       const existing = await tx.loyaltyTransaction.findUnique({
         where: {
@@ -418,6 +343,24 @@ export const redeemPoints = async ({
         },
       });
 
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action: "LOYALTY_POINTS_REDEEMED",
+        resource: "LOYALTY_ACCOUNT",
+        resourceId: account.id,
+        description: `Redeemed ${points} loyalty points against bill ${bill.billNumber}.`,
+        metadata: {
+          customerId,
+          billId,
+          pointsRedeemed: points,
+          discountValue: redemptionValue.toFixed(2),
+          previousBalance: account.pointsBalance,
+          resultingBalance: account.pointsBalance - points,
+        },
+      });
+
       return {
         transaction,
         pointsRedeemed: points,
@@ -431,7 +374,7 @@ export const redeemPoints = async ({
   );
 };
 
-// 7. Manager-authorized points adjustment
+// 3. Manager-authorized points adjustment
 export const adjustCustomerPoints = async ({
   restaurantId,
   customerId,
@@ -439,7 +382,10 @@ export const adjustCustomerPoints = async ({
   description,
   idempotencyKey,
   userId,
+  userRole,
 }) => {
+  assertRole(userRole, ["OWNER", "ADMIN", "MANAGER"]);
+
   return prisma.$transaction(
     async (tx) => {
       const customer = await tx.customer.findFirst({
@@ -455,6 +401,10 @@ export const adjustCustomerPoints = async ({
       }
 
       const account = await getOrCreateAccount(tx, customer.id);
+
+      if (!account.isActive) {
+        throw createError("This loyalty account is inactive.", 409);
+      }
 
       const existing = await tx.loyaltyTransaction.findUnique({
         where: {
@@ -520,6 +470,24 @@ export const adjustCustomerPoints = async ({
         },
       });
 
+      await createAuditLog({
+        tx,
+        restaurantId,
+        userId,
+        action: "LOYALTY_POINTS_ADJUSTED",
+        resource: "LOYALTY_ACCOUNT",
+        resourceId: account.id,
+        description: `Manually adjusted customer loyalty points by ${points}.`,
+        metadata: {
+          customerId,
+          pointsAdjusted: points,
+          adjustmentDescription: description,
+          previousBalance: account.pointsBalance,
+          resultingBalance: account.pointsBalance + points,
+          transactionId: transaction.id,
+        },
+      });
+
       return {
         transaction,
         pointsBalance: account.pointsBalance + points,
@@ -531,7 +499,7 @@ export const adjustCustomerPoints = async ({
   );
 };
 
-// 8. Loyalty transaction history
+// 4. Loyalty transaction history
 export const getCustomerLoyaltyHistory = async ({
   restaurantId,
   customerId,
@@ -566,5 +534,225 @@ export const getCustomerLoyaltyHistory = async ({
     },
     pointsBalance: customer.loyaltyAccount?.pointsBalance ?? 0,
     transactions: customer.loyaltyAccount?.transactions ?? [],
+  };
+};
+
+/**
+ * Reverse loyalty points proportionally when a refund is completed.
+ *
+ * Must be called inside the same Prisma transaction that completes
+ * the refund. The current refund must already have status COMPLETED
+ * within that transaction.
+ */
+export const reversePointsForRefund = async ({
+  tx,
+  restaurantId,
+  payment,
+  refund,
+  userId,
+}) => {
+  if (!tx || !payment || !refund) {
+    throw createError("Refund reversal is missing required data.");
+  }
+
+  if (
+    payment.restaurantId !== restaurantId ||
+    refund.restaurantId !== restaurantId ||
+    refund.paymentId !== payment.id
+  ) {
+    throw createError(
+      "Refund and payment do not belong to this restaurant.",
+      403
+    );
+  }
+
+  if (refund.status !== "COMPLETED") {
+    throw createError(
+      "Only completed refunds can reverse loyalty points.",
+      409
+    );
+  }
+
+  const customerId = payment.bill?.customerId;
+
+  if (!customerId) {
+    return {
+      reversed: false,
+      message: "The bill is not linked to a customer.",
+    };
+  }
+
+  const account = await tx.loyaltyAccount.findUnique({
+    where: { customerId },
+  });
+
+  if (!account) {
+    return {
+      reversed: false,
+      message: "No loyalty account exists for this customer.",
+    };
+  }
+
+  const earningTransaction = await tx.loyaltyTransaction.findUnique({
+    where: {
+      accountId_idempotencyKey: {
+        accountId: account.id,
+        idempotencyKey: `PAYMENT:${payment.id}`,
+      },
+    },
+  });
+
+  if (!earningTransaction || earningTransaction.type !== "EARN") {
+    return {
+      reversed: false,
+      message: "No loyalty points were earned from this payment.",
+    };
+  }
+
+  const earnedPoints = earningTransaction.points;
+
+  if (earnedPoints <= 0) {
+    return {
+      reversed: false,
+      message: "The original earning transaction has no reversible points.",
+    };
+  }
+
+  const completedRefunds = await tx.refund.aggregate({
+    where: {
+      restaurantId,
+      paymentId: payment.id,
+      status: "COMPLETED",
+    },
+    _sum: {
+      amount: true,
+    },
+  });
+
+  const cumulativeRefund = new Prisma.Decimal(
+    completedRefunds._sum.amount || 0
+  );
+
+  const originalPaymentAmount = new Prisma.Decimal(payment.amount);
+
+  if (!originalPaymentAmount.greaterThan(0)) {
+    throw createError("Original payment amount is invalid.", 409);
+  }
+
+  if (cumulativeRefund.greaterThan(originalPaymentAmount)) {
+    throw createError(
+      "Completed refunds exceed the original payment amount.",
+      409
+    );
+  }
+
+  const targetReversal = cumulativeRefund.equals(originalPaymentAmount)
+    ? earnedPoints
+    : new Prisma.Decimal(earnedPoints)
+        .mul(cumulativeRefund)
+        .div(originalPaymentAmount)
+        .floor()
+        .toNumber();
+
+  const reversalPrefix = `PAYMENT_REFUND:${payment.id}:`;
+
+  const existingReversals = await tx.loyaltyTransaction.aggregate({
+    where: {
+      accountId: account.id,
+      type: "REVERSAL",
+      idempotencyKey: {
+        startsWith: reversalPrefix,
+      },
+    },
+    _sum: {
+      points: true,
+    },
+  });
+
+  const alreadyReversed = Math.abs(
+    existingReversals._sum.points || 0
+  );
+
+  const pointsToReverse = Math.min(
+    earnedPoints - alreadyReversed,
+    Math.max(0, targetReversal - alreadyReversed)
+  );
+
+  if (pointsToReverse <= 0) {
+    return {
+      reversed: false,
+      duplicate: true,
+      message: "The required loyalty points have already been reversed.",
+      pointsReversed: 0,
+    };
+  }
+
+  const idempotencyKey = `${reversalPrefix}${refund.id}`;
+
+  const existingReversal = await tx.loyaltyTransaction.findUnique({
+    where: {
+      accountId_idempotencyKey: {
+        accountId: account.id,
+        idempotencyKey,
+      },
+    },
+  });
+
+  if (existingReversal) {
+    return {
+      reversed: false,
+      duplicate: true,
+      transaction: existingReversal,
+    };
+  }
+
+  // A refund can create a negative points balance if previously
+  // earned points have already been spent.
+  const updatedAccount = await tx.loyaltyAccount.update({
+    where: { id: account.id },
+    data: {
+      pointsBalance: {
+        decrement: pointsToReverse,
+      },
+    },
+  });
+
+  const transaction = await tx.loyaltyTransaction.create({
+    data: {
+      accountId: account.id,
+      billId: payment.billId,
+      type: "REVERSAL",
+      points: -pointsToReverse,
+      description: `Reversed ${pointsToReverse} points following refund ${refund.id}`,
+      idempotencyKey,
+      performedBy: userId || null,
+    },
+  });
+
+  await createAuditLog({
+    tx,
+    restaurantId,
+    userId: userId || null,
+    action: "LOYALTY_POINTS_REVERSED",
+    resource: "LOYALTY_ACCOUNT",
+    resourceId: account.id,
+    description: `Reversed ${pointsToReverse} loyalty points following a completed refund.`,
+    metadata: {
+      customerId,
+      paymentId: payment.id,
+      refundId: refund.id,
+      originalPointsEarned: earnedPoints,
+      cumulativeRefund: cumulativeRefund.toFixed(2),
+      originalPaymentAmount: originalPaymentAmount.toFixed(2),
+      pointsReversed: pointsToReverse,
+      resultingBalance: updatedAccount.pointsBalance,
+    },
+  });
+
+  return {
+    reversed: true,
+    pointsReversed: pointsToReverse,
+    pointsBalance: updatedAccount.pointsBalance,
+    transaction,
   };
 };

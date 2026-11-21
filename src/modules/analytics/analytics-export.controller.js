@@ -1,19 +1,19 @@
 
 import { exportAnalyticsReport } from "./analytics-export.service.js";
 import {
-  analyticsOverviewQuerySchema,
+  analyticsExportQuerySchema,
 } from "./analytics.validation.js";
 
 export async function exportAnalyticsController(req, res, next) {
   try {
-    const validation = analyticsOverviewQuerySchema.safeParse(
+    const validation = analyticsExportQuerySchema.safeParse(
       req.query
     );
 
     if (!validation.success) {
       return res.status(400).json({
         success: false,
-        message: "Invalid export date filters.",
+        message: "Invalid export filters.",
         errors: validation.error.flatten(),
       });
     }
@@ -29,6 +29,7 @@ export async function exportAnalyticsController(req, res, next) {
       "Content-Disposition",
       `attachment; filename="${filename}"`
     );
+    res.setHeader("Cache-Control", "no-store");
 
     return res.status(200).send(csv);
   } catch (error) {

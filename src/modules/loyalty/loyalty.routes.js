@@ -2,10 +2,6 @@
 import { Router } from "express";
 
 import {
-  createCustomerController,
-  listCustomersController,
-  getCustomerController,
-  updateCustomerController,
   awardPointsController,
   redeemPointsController,
   adjustPointsController,
@@ -13,9 +9,8 @@ import {
 } from "./loyalty.controller.js";
 
 import {
-  createCustomerSchema,
-  updateCustomerSchema,
   customerIdParamsSchema,
+  paymentIdParamsSchema,
   redeemPointsSchema,
   adjustPointsSchema,
 } from "./loyalty.validation.js";
@@ -24,6 +19,8 @@ import {
   authenticate,
   authorize,
 } from "../auth/auth.middleware.js";
+
+import { validate } from "../../middleware/validate.middleware.js";
 
 const router = Router();
 
@@ -41,53 +38,7 @@ const customerStaff = authorize(
   "WAITER"
 );
 
-const validate = (schema, source = "body") => {
-  return (req, res, next) => {
-    const result = schema.safeParse(req[source]);
-
-    if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed.",
-        errors: result.error.flatten(),
-      });
-    }
-
-    req[source] = result.data;
-    next();
-  };
-};
-
 router.use(authenticate);
-
-// Customer management
-router.post(
-  "/customers",
-  customerStaff,
-  validate(createCustomerSchema),
-  createCustomerController
-);
-
-router.get(
-  "/customers",
-  customerStaff,
-  listCustomersController
-);
-
-router.get(
-  "/customers/:customerId",
-  customerStaff,
-  validate(customerIdParamsSchema, "params"),
-  getCustomerController
-);
-
-router.patch(
-  "/customers/:customerId",
-  customerStaff,
-  validate(customerIdParamsSchema, "params"),
-  validate(updateCustomerSchema),
-  updateCustomerController
-);
 
 // Redeem points against a bill
 router.post(
@@ -106,10 +57,12 @@ router.post(
   adjustPointsController
 );
 
-// Award points for a verified payment
+// Manual award endpoint.
+// Automatic awards should be triggered by verified payment processing.
 router.post(
   "/payments/:paymentId/award",
   managersOnly,
+  validate(paymentIdParamsSchema, "params"),
   awardPointsController
 );
 

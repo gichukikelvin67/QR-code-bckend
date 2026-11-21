@@ -3,23 +3,66 @@ import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
 
 const ZERO = new Prisma.Decimal(0);
+const REPORT_TIME_ZONE = "Africa/Nairobi";
+const DEFAULT_TOP_ITEMS_LIMIT = 10;
+const MAX_TOP_ITEMS_LIMIT = 100;
 
-function getDateRange(from, to) {
+const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: REPORT_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function getNairobiDateString(date = new Date()) {
+  const parts = dateFormatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function addCalendarDays(dateString, days) {
+  const [year, month, day] = dateString.split("-").map(Number);
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return date.toISOString().slice(0, 10);
+}
+
+// Kenya uses UTC+3 throughout the year.
+function getNairobiDayStart(dateString) {
+  const [year, month, day] = dateString.split("-").map(Number);
+
+  return new Date(
+    Date.UTC(year, month - 1, day) - 3 * 60 * 60 * 1000
+  );
+}
+
+function getDateRange(from, to, field = "createdAt") {
   if (!from && !to) return {};
 
-  const createdAt = {};
+  const range = {};
 
   if (from) {
-    createdAt.gte = new Date(`${from}T00:00:00.000Z`);
+    range.gte = getNairobiDayStart(from);
   }
 
   if (to) {
-    const endDate = new Date(`${to}T00:00:00.000Z`);
-    endDate.setUTCDate(endDate.getUTCDate() + 1);
-    createdAt.lt = endDate;
+    range.lt = getNairobiDayStart(
+      addCalendarDays(to, 1)
+    );
   }
 
-  return { createdAt };
+  return {
+    [field]: range,
+  };
 }
 
 function sumDecimals(records, field) {
@@ -33,57 +76,68 @@ function money(value) {
   return Number(value.toFixed(2));
 }
 
+function quantity(value) {
+  return Number(value.toFixed(3));
+}
+
+function getPeriod(from, to) {
+  return {
+    from: from ?? null,
+    to: to ?? null,
+    timeZone: REPORT_TIME_ZONE,
+  };
+}
+
+function getTrendDateRange(from, to) {
+  const today = getNairobiDateString();
+
+  const endDate = to ?? today;
+
+  const startDate = from
+    ?? (to ? endDate : addCalendarDays(today, -6));
+
+  if (startDate > endDate) {
+    throw Object.assign(
+      new Error("The start date cannot be after the end date."),
+      { statusCode: 400 }
+    );
+  }
+
+  return {
+    startDate,
+    endDate,
+    start: getNairobiDayStart(startDate),
+    endExclusive: getNairobiDayStart(
+      addCalendarDays(endDate, 1)
+    ),
+  };
+}
+
 export async function getAnalyticsOverview({
   restaurantId,
   from,
   to,
 }) {
-  const dateRange = getDateRange(from, to);
-
-  const paymentDateRange = from || to
-    ? {
-        verifiedAt: {
-          ...(from
-            ? { gte: new Date(`${from}T00:00:00.000Z`) }
-            : {}),
-          ...(to
-            ? {
-                lt: (() => {
-                  const date = new Date(`${to}T00:00:00.000Z`);
-                  date.setUTCDate(date.getUTCDate() + 1);
-                  return date;
-                })(),
-              }
-            : {}),
-        },
-      }
-    : {};
-
-  const refundDateRange = from || to
-    ? {
-        processedAt: {
-          ...(from
-            ? { gte: new Date(`${from}T00:00:00.000Z`) }
-            : {}),
-          ...(to
-            ? {
-                lt: (() => {
-                  const date = new Date(`${to}T00:00:00.000Z`);
-                  date.setUTCDate(date.getUTCDate() + 1);
-                  return date;
-                })(),
-              }
-            : {}),
-        },
-      }
-    : {};
+  const orderDateRange = getDateRange(from, to);
+  const paymentDateRange = getDateRange(
+    from,
+    to,
+    "verifiedAt"
+  );
+  const refundDateRange = getDateRange(
+    from,
+    to,
+    "processedAt"
+  );
 
   const [
     payments,
     refunds,
     orderStats,
-    outstandingBills,
-    ordersCount,
+    servedOrderStats,
+    totalOrders,
+    currentOutstanding,
+    periodOutstanding,
   ] = await Promise.all([
     prisma.payment.findMany({
       where: {
@@ -102,6 +156,7 @@ export async function getAnalyticsOverview({
       where: {
         restaurantId,
         status: "COMPLETED",
+        processedAt: { not: null },
         ...refundDateRange,
       },
       select: {
@@ -113,7 +168,7 @@ export async function getAnalyticsOverview({
       where: {
         restaurantId,
         status: { not: "CANCELLED" },
-        ...dateRange,
+        ...orderDateRange,
       },
       _sum: {
         total: true,
@@ -123,23 +178,49 @@ export async function getAnalyticsOverview({
       },
     }),
 
-    prisma.bill.aggregate({
+    prisma.order.aggregate({
       where: {
         restaurantId,
-        status: {
-          in: ["OPEN", "PARTIALLY_PAID"],
-        },
-        ...dateRange,
+        status: "SERVED",
+        ...orderDateRange,
       },
       _sum: {
-        balance: true,
+        total: true,
+      },
+      _count: {
+        _all: true,
       },
     }),
 
     prisma.order.count({
       where: {
         restaurantId,
-        ...dateRange,
+        ...orderDateRange,
+      },
+    }),
+
+    prisma.bill.aggregate({
+      where: {
+        restaurantId,
+        status: {
+          in: ["OPEN", "PARTIALLY_PAID"],
+        },
+      },
+      _sum: {
+        balance: true,
+      },
+    }),
+
+    prisma.bill.aggregate({
+      where: {
+        restaurantId,
+        status: {
+          in: ["OPEN", "PARTIALLY_PAID"],
+        },
+        ...getDateRange(from, to),
+      },
+      _sum: {
+        balance: true,
       },
     }),
   ]);
@@ -148,33 +229,38 @@ export async function getAnalyticsOverview({
   const completedRefunds = sumDecimals(refunds, "amount");
   const netRevenue = grossPayments.minus(completedRefunds);
 
-  const orderTotal = orderStats._sum.total ?? ZERO;
-  const completedOrderCount = orderStats._count._all;
+  const nonCancelledOrderCount =
+    orderStats._count._all;
 
-  const averageOrderValue =
-    completedOrderCount > 0
-      ? orderTotal.div(completedOrderCount)
-      : ZERO;
+  const servedOrderCount =
+    servedOrderStats._count._all;
 
-  const paymentBreakdown = Object.values(
-    payments.reduce((result, payment) => {
-      const method = payment.method;
+  const servedOrderValue =
+    servedOrderStats._sum.total ?? ZERO;
 
-      if (!result[method]) {
-        result[method] = {
-          method,
-          transactionCount: 0,
-          amount: ZERO,
-        };
-      }
+  const averageOrderValue = servedOrderCount > 0
+    ? servedOrderValue.div(servedOrderCount)
+    : ZERO;
 
-      result[method].transactionCount += 1;
-      result[method].amount = result[method].amount.plus(
-        payment.amount
-      );
+  const paymentMap = new Map();
 
-      return result;
-    }, {})
+  for (const payment of payments) {
+    if (!paymentMap.has(payment.method)) {
+      paymentMap.set(payment.method, {
+        method: payment.method,
+        transactionCount: 0,
+        amount: ZERO,
+      });
+    }
+
+    const entry = paymentMap.get(payment.method);
+
+    entry.transactionCount += 1;
+    entry.amount = entry.amount.plus(payment.amount);
+  }
+
+  const paymentBreakdown = Array.from(
+    paymentMap.values()
   ).map((entry) => ({
     method: entry.method,
     transactionCount: entry.transactionCount,
@@ -182,10 +268,7 @@ export async function getAnalyticsOverview({
   }));
 
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
-    },
+    period: getPeriod(from, to),
 
     revenue: {
       grossPayments: money(grossPayments),
@@ -194,14 +277,18 @@ export async function getAnalyticsOverview({
     },
 
     orders: {
-      total: ordersCount,
-      nonCancelled: completedOrderCount,
+      total: totalOrders,
+      nonCancelled: nonCancelledOrderCount,
+      served: servedOrderCount,
       averageOrderValue: money(averageOrderValue),
     },
 
     outstanding: {
-      billBalance: money(
-        outstandingBills._sum.balance ?? ZERO
+      currentBalance: money(
+        currentOutstanding._sum.balance ?? ZERO
+      ),
+      periodCreatedBalance: money(
+        periodOutstanding._sum.balance ?? ZERO
       ),
     },
 
@@ -214,29 +301,12 @@ export async function getSalesTrends({
   from,
   to,
 }) {
-  const today = new Date();
-  const endDate = to
-    ? new Date(`${to}T00:00:00.000Z`)
-    : new Date(Date.UTC(
-        today.getUTCFullYear(),
-        today.getUTCMonth(),
-        today.getUTCDate()
-      ));
-
-  const startDate = from
-    ? new Date(`${from}T00:00:00.000Z`)
-    : new Date(endDate);
-
-  if (!from) {
-    startDate.setUTCDate(startDate.getUTCDate() - 6);
-  }
-
-  const exclusiveEndDate = new Date(endDate);
-  exclusiveEndDate.setUTCDate(exclusiveEndDate.getUTCDate() + 1);
-
-  if (startDate > endDate) {
-    throw new Error("The start date cannot be after the end date.");
-  }
+  const {
+    startDate,
+    endDate,
+    start,
+    endExclusive,
+  } = getTrendDateRange(from, to);
 
   const [payments, refunds, orders] = await Promise.all([
     prisma.payment.findMany({
@@ -244,8 +314,8 @@ export async function getSalesTrends({
         restaurantId,
         status: "COMPLETED",
         verifiedAt: {
-          gte: startDate,
-          lt: exclusiveEndDate,
+          gte: start,
+          lt: endExclusive,
         },
       },
       select: {
@@ -259,8 +329,8 @@ export async function getSalesTrends({
         restaurantId,
         status: "COMPLETED",
         processedAt: {
-          gte: startDate,
-          lt: exclusiveEndDate,
+          gte: start,
+          lt: endExclusive,
         },
       },
       select: {
@@ -274,8 +344,8 @@ export async function getSalesTrends({
         restaurantId,
         status: { not: "CANCELLED" },
         createdAt: {
-          gte: startDate,
-          lt: exclusiveEndDate,
+          gte: start,
+          lt: endExclusive,
         },
       },
       select: {
@@ -287,34 +357,35 @@ export async function getSalesTrends({
   const daily = new Map();
 
   for (
-    let date = new Date(startDate);
+    let date = startDate;
     date <= endDate;
-    date.setUTCDate(date.getUTCDate() + 1)
+    date = addCalendarDays(date, 1)
   ) {
-    const key = date.toISOString().slice(0, 10);
-
-    daily.set(key, {
-      date: key,
+    daily.set(date, {
+      date,
       grossPayments: ZERO,
       refunds: ZERO,
-      netRevenue: ZERO,
       orders: 0,
     });
   }
 
   for (const payment of payments) {
-    const key = payment.verifiedAt.toISOString().slice(0, 10);
+    if (!payment.verifiedAt) continue;
+
+    const key = getNairobiDateString(payment.verifiedAt);
     const entry = daily.get(key);
 
     if (entry) {
-      entry.grossPayments = entry.grossPayments.plus(payment.amount);
+      entry.grossPayments = entry.grossPayments.plus(
+        payment.amount
+      );
     }
   }
 
   for (const refund of refunds) {
     if (!refund.processedAt) continue;
 
-    const key = refund.processedAt.toISOString().slice(0, 10);
+    const key = getNairobiDateString(refund.processedAt);
     const entry = daily.get(key);
 
     if (entry) {
@@ -323,7 +394,7 @@ export async function getSalesTrends({
   }
 
   for (const order of orders) {
-    const key = order.createdAt.toISOString().slice(0, 10);
+    const key = getNairobiDateString(order.createdAt);
     const entry = daily.get(key);
 
     if (entry) {
@@ -331,58 +402,33 @@ export async function getSalesTrends({
     }
   }
 
-  const trends = Array.from(daily.values()).map((entry) => {
-    const netRevenue = entry.grossPayments.minus(entry.refunds);
-
-    return {
-      date: entry.date,
-      grossPayments: money(entry.grossPayments),
-      refunds: money(entry.refunds),
-      netRevenue: money(netRevenue),
-      orders: entry.orders,
-    };
-  });
+  const trends = Array.from(daily.values()).map((entry) => ({
+    date: entry.date,
+    grossPayments: money(entry.grossPayments),
+    refunds: money(entry.refunds),
+    netRevenue: money(
+      entry.grossPayments.minus(entry.refunds)
+    ),
+    orders: entry.orders,
+  }));
 
   return {
-    period: {
-      from: startDate.toISOString().slice(0, 10),
-      to: endDate.toISOString().slice(0, 10),
-    },
+    period: getPeriod(startDate, endDate),
     trends,
   };
 }
-
 
 export async function getPaymentMethodsReport({
   restaurantId,
   from,
   to,
 }) {
-  const dateRange = from || to
-    ? {
-        verifiedAt: {
-          ...(from
-            ? { gte: new Date(`${from}T00:00:00.000Z`) }
-            : {}),
-          ...(to
-            ? {
-                lt: (() => {
-                  const date = new Date(`${to}T00:00:00.000Z`);
-                  date.setUTCDate(date.getUTCDate() + 1);
-                  return date;
-                })(),
-              }
-            : {}),
-        },
-      }
-    : {};
-
   const payments = await prisma.payment.findMany({
     where: {
       restaurantId,
       status: "COMPLETED",
       verifiedAt: { not: null },
-      ...dateRange,
+      ...getDateRange(from, to, "verifiedAt"),
     },
     select: {
       method: true,
@@ -390,29 +436,30 @@ export async function getPaymentMethodsReport({
     },
   });
 
-  const report = {};
+  const report = new Map();
 
   for (const payment of payments) {
-    if (!report[payment.method]) {
-      report[payment.method] = {
+    if (!report.has(payment.method)) {
+      report.set(payment.method, {
         method: payment.method,
         transactionCount: 0,
         totalAmount: ZERO,
-      };
+      });
     }
 
-    report[payment.method].transactionCount += 1;
-    report[payment.method].totalAmount =
-      report[payment.method].totalAmount.plus(payment.amount);
+    const entry = report.get(payment.method);
+
+    entry.transactionCount += 1;
+    entry.totalAmount = entry.totalAmount.plus(
+      payment.amount
+    );
   }
 
   const grossTotal = sumDecimals(payments, "amount");
 
-  const methods = Object.values(report).map((entry) => {
+  const methods = Array.from(report.values()).map((entry) => {
     const percentage = grossTotal.gt(0)
-      ? entry.totalAmount
-          .div(grossTotal)
-          .mul(100)
+      ? entry.totalAmount.div(grossTotal).mul(100)
       : ZERO;
 
     return {
@@ -424,24 +471,23 @@ export async function getPaymentMethodsReport({
   });
 
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
-    },
+    period: getPeriod(from, to),
     totalTransactions: payments.length,
     grossPayments: money(grossTotal),
     methods,
   };
 }
 
-
 export async function getTopSellingItems({
   restaurantId,
   from,
   to,
-  limit = 10,
+  limit = DEFAULT_TOP_ITEMS_LIMIT,
 }) {
-  const dateRange = getDateRange(from, to);
+  const safeLimit = Math.min(
+    MAX_TOP_ITEMS_LIMIT,
+    Math.max(1, Math.trunc(Number(limit) || DEFAULT_TOP_ITEMS_LIMIT))
+  );
 
   const items = await prisma.orderItem.groupBy({
     by: ["menuItemId", "itemName"],
@@ -449,7 +495,7 @@ export async function getTopSellingItems({
       order: {
         restaurantId,
         status: { not: "CANCELLED" },
-        ...dateRange,
+        ...getDateRange(from, to),
       },
     },
     _sum: {
@@ -464,14 +510,12 @@ export async function getTopSellingItems({
         quantity: "desc",
       },
     },
-    take: limit,
+    take: safeLimit,
   });
 
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
-    },
+    period: getPeriod(from, to),
+    limit: safeLimit,
     items: items.map((item) => ({
       menuItemId: item.menuItemId,
       itemName: item.itemName,
@@ -482,19 +526,16 @@ export async function getTopSellingItems({
   };
 }
 
-
 export async function getOrderPerformance({
   restaurantId,
   from,
   to,
 }) {
-  const dateRange = getDateRange(from, to);
-
   const groupedOrders = await prisma.order.groupBy({
     by: ["status"],
     where: {
       restaurantId,
-      ...dateRange,
+      ...getDateRange(from, to),
     },
     _count: {
       _all: true,
@@ -541,10 +582,7 @@ export async function getOrderPerformance({
     : 0;
 
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
-    },
+    period: getPeriod(from, to),
     totalOrders,
     servedOrders,
     cancelledOrders,
@@ -558,8 +596,6 @@ export async function getInventoryInsights({
   from,
   to,
 }) {
-  const dateRange = getDateRange(from, to);
-
   const [items, movements] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: {
@@ -580,7 +616,7 @@ export async function getInventoryInsights({
       by: ["type"],
       where: {
         restaurantId,
-        ...dateRange,
+        ...getDateRange(from, to),
       },
       _sum: {
         quantity: true,
@@ -608,8 +644,8 @@ export async function getInventoryInsights({
     return {
       type,
       transactions: movement?._count._all ?? 0,
-      quantity: Number(
-        (movement?._sum.quantity ?? ZERO).toFixed(3)
+      quantity: quantity(
+        movement?._sum.quantity ?? ZERO
       ),
     };
   });
@@ -629,25 +665,29 @@ export async function getInventoryInsights({
   );
 
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
+    period: getPeriod(from, to),
+
+    valuation: {
+      type: "CURRENT_STOCK_SNAPSHOT",
+      estimatedInventoryValue: money(inventoryValue),
     },
 
     summary: {
       totalActiveItems: items.length,
       lowStockItems: lowStockItems.length,
       outOfStockItems: outOfStockItems.length,
-      estimatedInventoryValue: money(inventoryValue),
     },
 
-    movements: movementBreakdown,
+    movements: {
+      period: getPeriod(from, to),
+      breakdown: movementBreakdown,
+    },
 
     lowStock: lowStockItems.map((item) => ({
       id: item.id,
       name: item.name,
-      currentStock: Number(item.currentStock.toFixed(3)),
-      reorderLevel: Number(item.reorderLevel.toFixed(3)),
+      currentStock: quantity(item.currentStock),
+      reorderLevel: quantity(item.reorderLevel),
       unit: item.unit,
     })),
   };
@@ -658,14 +698,13 @@ export async function getStaffPerformance({
   from,
   to,
 }) {
-  const dateRange = getDateRange(from, to);
-
   const history = await prisma.orderStatusHistory.findMany({
     where: {
       restaurantId,
-      ...dateRange,
+      ...getDateRange(from, to),
     },
     select: {
+      orderId: true,
       performedBy: true,
       toStatus: true,
       user: {
@@ -686,20 +725,25 @@ export async function getStaffPerformance({
     if (!staffMap.has(userId)) {
       staffMap.set(userId, {
         userId,
-        name: record.user.name,
-        email: record.user.email,
+        name: record.user?.name ?? "Unknown user",
+        email: record.user?.email ?? null,
         ordersAccepted: 0,
         ordersPrepared: 0,
         ordersReady: 0,
         ordersServed: 0,
         ordersCancelled: 0,
         totalActions: 0,
+        handledOrderIds: new Set(),
       });
     }
 
     const staff = staffMap.get(userId);
 
     staff.totalActions += 1;
+
+    if (record.orderId) {
+      staff.handledOrderIds.add(record.orderId);
+    }
 
     switch (record.toStatus) {
       case "ACCEPTED":
@@ -720,14 +764,23 @@ export async function getStaffPerformance({
     }
   }
 
+  const staff = Array.from(staffMap.values())
+    .map((entry) => {
+      const {
+        handledOrderIds,
+        ...staffData
+      } = entry;
+
+      return {
+        ...staffData,
+        uniqueOrdersHandled: handledOrderIds.size,
+      };
+    })
+    .sort((a, b) => b.totalActions - a.totalActions);
+
   return {
-    period: {
-      from: from ?? null,
-      to: to ?? null,
-    },
-    totalStaff: staffMap.size,
-    staff: Array.from(staffMap.values()).sort(
-      (a, b) => b.totalActions - a.totalActions
-    ),
+    period: getPeriod(from, to),
+    totalStaff: staff.length,
+    staff,
   };
 }

@@ -29,6 +29,31 @@ export const updateCustomerSchema = z.object({
   { message: "Provide at least one field to update." }
 );
 
+// Configure or update a customer's credit facility.
+export const updateCustomerCreditSchema = z.object({
+  allowCredit: z.boolean(),
+  creditLimit: z.number()
+    .finite()
+    .min(0)
+    .max(99999999.99)
+    .refine(
+      (value) => Number.isInteger(value * 100),
+      "Credit limit must have no more than two decimal places."
+    ),
+}).strict().refine(
+  (data) => !data.allowCredit || data.creditLimit > 0,
+  {
+    message: "An enabled credit facility must have a credit limit greater than zero.",
+    path: ["creditLimit"],
+  }
+).refine(
+  (data) => data.allowCredit || data.creditLimit === 0,
+  {
+    message: "Set the credit limit to zero when disabling credit.",
+    path: ["creditLimit"],
+  }
+);
+
 export const customerIdParamsSchema = z.object({
   customerId: z.string().uuid(),
 });

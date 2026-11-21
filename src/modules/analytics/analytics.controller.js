@@ -11,6 +11,7 @@ import {
 
 import {
   analyticsOverviewQuerySchema,
+  analyticsTopSellingQuerySchema,
 } from "./analytics.validation.js";
 
 export async function analyticsOverview(req, res, next) {
@@ -103,19 +104,19 @@ export async function paymentMethodsReport(req, res, next) {
 
 export async function topSellingItems(req, res, next) {
   try {
-    const validation = analyticsOverviewQuerySchema.safeParse(
+    const validation = analyticsTopSellingQuerySchema.safeParse(
       req.query
     );
 
     if (!validation.success) {
       return res.status(400).json({
         success: false,
-        message: "Invalid analytics date filters.",
+        message: "Invalid top-selling report filters.",
         errors: validation.error.flatten(),
       });
     }
 
-    const result = await getTopSellingItems({
+    const data = await getTopSellingItems({
       restaurantId: req.auth.restaurantId,
       ...validation.data,
     });
@@ -123,7 +124,7 @@ export async function topSellingItems(req, res, next) {
     return res.status(200).json({
       success: true,
       message: "Top-selling items retrieved successfully.",
-      data: result,
+      data,
     });
   } catch (error) {
     next(error);

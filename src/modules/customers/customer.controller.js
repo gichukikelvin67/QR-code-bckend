@@ -4,6 +4,7 @@ import {
   listCustomers,
   getCustomerById,
   updateCustomer,
+  updateCustomerCredit,
 } from "./customer.service.js";
 
 export async function createCustomerHandler(req, res, next) {
@@ -70,6 +71,27 @@ export async function updateCustomerHandler(req, res, next) {
     res.status(200).json({
       success: true,
       message: "Customer updated successfully.",
+      data: customer,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Configure or update customer credit.
+export async function updateCustomerCreditHandler(req, res, next) {
+  try {
+    const customer = await updateCustomerCredit(
+      req.auth.restaurantId,
+      req.auth.userId,
+      req.auth.role,
+      req.validatedParams.customerId,
+      req.validatedBody
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Customer credit facility updated successfully.",
       data: customer,
     });
   } catch (error) {

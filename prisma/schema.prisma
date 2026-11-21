@@ -105,6 +105,12 @@ enum DiscountStatus {
   REVERSED
 }
 
+enum CustomerTabStatus {
+  OPEN
+  CLOSED
+  SUSPENDED
+}
+
 model Restaurant {
   id       String  @id @default(uuid())
   name     String
@@ -130,6 +136,7 @@ model Restaurant {
   customers           Customer[]
   orderStatusHistory  OrderStatusHistory[]
   auditLogs           AuditLog[]
+  customerTabs        CustomerTab[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -329,12 +336,15 @@ model Bill {
   payments            Payment[]
   loyaltyTransactions LoyaltyTransaction[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  tabId     String?
+  tab       CustomerTab? @relation(fields: [tabId], references: [id], onDelete: Restrict)
 
   @@unique([restaurantId, billNumber])
   @@index([restaurantId, status, createdAt])
   @@index([sessionId, status])
+  @@index([tabId, status])
 }
 
 model Payment {
@@ -471,8 +481,12 @@ model Customer {
   bills          Bill[]
   loyaltyAccount LoyaltyAccount?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  allowCredit Boolean  @default(false)
+  creditLimit Decimal  @default(0) @db.Decimal(12, 2)
+
+  tabs CustomerTab[]
 
   @@unique([restaurantId, phone])
   @@index([restaurantId, name])
@@ -788,4 +802,32 @@ model AuditLog {
   @@index([restaurantId, action, createdAt])
   @@index([restaurantId, resource, createdAt])
   @@index([userId, createdAt])
+}
+
+model CustomerTab {
+  id           String @id @default(uuid())
+  restaurantId String
+  customerId   String
+
+  tabNumber String
+  status    CustomerTabStatus @default(OPEN)
+
+  creditLimit Decimal @default(0) @db.Decimal(12, 2)
+  notes       String?
+
+  openedBy String
+  closedBy String?
+  closedAt DateTime?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  bills Bill[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, tabNumber])
+  @@index([restaurantId, status, createdAt])
+  @@index([customerId, status])
 }

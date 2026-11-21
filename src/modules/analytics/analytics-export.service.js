@@ -9,27 +9,46 @@ import {
   getStaffPerformance,
 } from "./analytics.service.js";
 
+const DEFAULT_TOP_ITEMS_LIMIT = 10;
 
 function escapeCsv(value) {
-  let text = String(value ?? "");
+  if (value === null || value === undefined) {
+    return '""';
+  }
+
+  let text = String(value);
 
   // Prevent spreadsheet formula injection.
   if (/^[\s\u0000-\u001F]*[=+\-@]/.test(text)) {
     text = `'${text}`;
   }
 
-  // Escape quotes according to CSV rules.
+  // Escape double quotes according to CSV rules.
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-
 function createCsv(headers, rows) {
-  return [
-    headers.map(escapeCsv).join(","),
-    ...rows.map((row) =>
-      headers.map((header) => escapeCsv(row[header])).join(",")
-    ),
-  ].join("\r\n");
+  const headerRow = headers
+    .map(escapeCsv)
+    .join(",");
+
+  const dataRows = rows.map((row) =>
+    headers
+      .map((header) => escapeCsv(row[header]))
+      .join(",")
+  );
+
+  // BOM improves compatibility with spreadsheet applications.
+  return "\uFEFF" + [headerRow, ...dataRows].join("\r\n");
+}
+
+function createFilename(report, from, to) {
+  const safeReport = String(report).replace(/[^a-z0-9-]/gi, "");
+
+  const safeFrom = from ?? "all";
+  const safeTo = to ?? "all";
+
+  return `analytics-${safeReport}-${safeFrom}-${safeTo}.csv`;
 }
 
 export async function exportAnalyticsReport({
@@ -37,8 +56,13 @@ export async function exportAnalyticsReport({
   report,
   from,
   to,
+  limit = DEFAULT_TOP_ITEMS_LIMIT,
 }) {
-  const params = { restaurantId, from, to };
+  const params = {
+    restaurantId,
+    from,
+    to,
+  };
 
   let result;
   let headers;
@@ -72,12 +96,20 @@ export async function exportAnalyticsReport({
           value: result.orders.nonCancelled,
         },
         {
-          metric: "Average Order Value",
+          metric: "Served Orders",
+          value: result.orders.served,
+        },
+        {
+          metric: "Average Order Value (Served Orders)",
           value: result.orders.averageOrderValue,
         },
         {
-          metric: "Outstanding Balance",
-          value: result.outstanding.billBalance,
+          metric: "Current Outstanding Balance",
+          value: result.outstanding.currentBalance,
+        },
+        {
+          metric: "Outstanding Balance on Bills Created During Period",
+          value: result.outstanding.periodCreatedBalance,
         },
       ];
 
@@ -114,7 +146,10 @@ export async function exportAnalyticsReport({
     }
 
     case "top-selling-items": {
-      result = await getTopSellingItems(params);
+      result = await getTopSellingItems({
+        ...params,
+        limit,
+      });
 
       headers = [
         "menuItemId",
@@ -131,7 +166,11 @@ export async function exportAnalyticsReport({
     case "order-performance": {
       result = await getOrderPerformance(params);
 
-      headers = ["status", "count", "orderValue"];
+      headers = [
+        "status",
+        "count",
+        "orderValue",
+      ];
 
       rows = result.breakdown;
       break;
@@ -148,6 +187,7 @@ export async function exportAnalyticsReport({
         "unit",
       ];
 
+      // This report intentionally exports low-stock items only.
       rows = result.lowStock;
       break;
     }
@@ -165,6 +205,7 @@ export async function exportAnalyticsReport({
         "ordersServed",
         "ordersCancelled",
         "totalActions",
+        "uniqueOrdersHandled",
       ];
 
       rows = result.staff;
@@ -180,7 +221,6 @@ export async function exportAnalyticsReport({
 
   return {
     csv: createCsv(headers, rows),
-    filename: `analytics-${report}-${from ?? "all"}-${to ?? "all"}.csv`,
+    filename: createFilename(report, from, to),
   };
 }
-//cvs report

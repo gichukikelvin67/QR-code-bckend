@@ -2,6 +2,7 @@
 import prisma from "../../config/database.js";
 import { Prisma } from "@prisma/client";
 import { createAuditLog } from "../audits/audit.service.js";
+import { reversePointsForRefund } from "../loyalty/loyalty.service.js";
 
 const createError = (message, statusCode = 400) => {
   const error = new Error(message);
@@ -374,6 +375,16 @@ export const completeRefund = async ({
           },
         });
       }
+      await reversePointsForRefund({
+  tx,
+  restaurantId,
+  payment,
+  refund: {
+    ...refund,
+    status: "COMPLETED",
+  },
+  userId,
+});
 
       return tx.refund.findUnique({
         where: {

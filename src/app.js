@@ -25,6 +25,7 @@ import analyticsRoutes from "./modules/analytics/analytics.routes.js";
 import auditRoutes from "./modules/audits/audit.routes.js";
 import customerRoutes from "./modules/customers/customer.routes.js";
 import employeeRoutes from "./modules/employees/employee.routes.js";
+import tabRoutes from "./modules/tabs/tab.routes.js";
 import { env } from "./config/env.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -82,6 +83,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/audits", auditRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/employees", employeeRoutes);
+app.use("/api/tabs", tabRoutes);
 
 
 app.use(notFoundHandler);
